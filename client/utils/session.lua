@@ -3,8 +3,9 @@ local json = require("json")
 local M = {}
 
 local SESSION_FILENAME = "session.json"
-local DEFAULT_BASE_URL = "http://192.168.1.250:3000"
+local DEFAULT_BASE_URL = "https://upbeat-intuition-production.up.railway.app"
 local OLD_BASE_URLS = {
+    ["http://192.168.1.250:3000"] = true,
     ["http://192.168.1.77:3000"] = true,
 }
 
