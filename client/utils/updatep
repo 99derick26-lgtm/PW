@@ -1,0 +1,151 @@
+print("ITEMS.LUA LOADED")
+
+local items = {
+    dagger_basic = {
+        id = "dagger_basic",
+        name = "Basic Dagger",
+        slot = "weapon",
+        icon = "assets/sprites/weapons/dagger_basic.png",
+        attack = 2,
+        price = 30,
+        sellPercent = 0.5
+    },
+
+    heavy_sword = {
+        id = "heavy_sword",
+        name = "Heavy Sword",
+        slot = "weapon",
+        icon = "assets/sprites/weapons/heavy_sword.png",
+        attack = 7,
+        speed = -1,
+        price = 100,
+        sellPercent = 0.5
+    },
+
+    katana_speed = {
+        id = "katana_speed",
+        name = "Speed Katana",
+        slot = "weapon",
+        icon = "assets/sprites/weapons/katana_speed.png",
+        attack = 5,
+        speed = 2,
+        price = 120,
+        sellPercent = 0.5
+    },
+
+    scrap_gun = {
+        id = "scrap_gun",
+        name = "Scrap Gun",
+        slot = "weapon",
+        icon = "assets/sprites/weapons/scrap_gun.png",
+        attack = 6,
+        price = 150,
+        sellPercent = 0.5
+    },
+
+    shield_bash = {
+        id = "shield_bash",
+        name = "Bashing Shield",
+        slot = "weapon",
+        icon = "assets/sprites/weapons/shield_bash.png",
+        attack = 2,
+        defense = 3,
+        price = 90,
+        sellPercent = 0.5
+    },
+
+    -- ARMOR
+leather_helmet = {
+    id = "leather_helmet",
+    name = "Leather Helmet",
+    slot = "helmet",
+    icon = "assets/sprites/armor/Leather_helmet.png",
+    defense = 2,
+    hp = 2,
+    price = 40,
+    sellPercent = 0.5
+},
+
+leather_chest = {
+    id = "leather_chest",
+    name = "Leather Jacket",
+    slot = "chest",
+     icon = "assets/sprites/armor/leather_chest.png",
+    defense = 4,
+    hp = 6,
+    price = 80,
+    sellPercent = 0.5
+},
+
+leather_gloves = {
+    id = "leather_gloves",
+    name = "Leather Gloves",
+    slot = "gloves",
+     icon = "assets/sprites/armor/leather_gloves.png",
+    defense = 1,
+    hp = 2,
+    price = 35,
+    sellPercent = 0.5
+},
+
+leather_boots = {
+    id = "leather_boots",
+    name = "Leather Boots",
+    slot = "boots",
+     icon = "assets/sprites/armor/leather_boots.png",
+    defense = 2,
+    hp = 2,
+    speed = 1,
+    price = 45,
+    sellPercent = 0.5
+},
+
+
+  -- PETS
+    dog = {
+        id = "dog",
+        name = "Dog",
+        slot = "pet",
+        price = 50,
+        icon = "assets/sprites/pets/dog.png",
+        sellPercent = 0.5
+    },
+
+    cat = {
+        id = "cat",
+        name = "Cat",
+        slot = "pet",
+        price = 60,
+        icon = "assets/sprites/pets/cat.png",
+        sellPercent = 0.5
+    },
+
+    snake = {
+        id = "snake",
+        name = "Snake",
+        slot = "pet",
+        price = 75,
+        icon = "assets/sprites/pets/snake.png",
+        sellPercent = 0.5
+    },
+
+    parrot = {
+        id = "parrot",
+        name = "Parrot",
+        slot = "pet",
+        price = 80,
+        icon = "assets/sprites/pets/parrot.png",
+        sellPercent = 0.5
+    },
+
+    horse = {
+        id = "horse",
+        name = "Horse",
+        slot = "pet",
+        price = 120,
+        icon = "assets/sprites/pets/horse.png",
+        sellPercent = 0.5
+    },
+}
+
+return items

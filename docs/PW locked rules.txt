@@ -1,0 +1,157 @@
+PIXEL WAR LOCKED RULES
+Last updated: 2026-05-15
+
+This file is the project source of truth for locked gameplay and engineering rules.
+If older notes conflict with this file, this file wins.
+
+CORE GAME IDENTITY
+
+- Platform: mobile-first Solar2D game.
+- Structure: Composer scenes, Lua client, local save plus HTTP server sync.
+- Genre: vertical cyberpunk pixel RPG with auto-battle combat.
+- Visual style: retro pixel RPG characters with modern cyber HUD.
+- Combat input: no direct player control during combat.
+- Combat result: deterministic battle log generated first, then played visually.
+
+SERVER AUTHORITY RULES
+
+- The server is authoritative for online/social/economy-sensitive systems.
+- Client local save can cache server state, but it must not be treated as final truth for online systems.
+- Shared network flow should go through:
+  - utils/api.lua
+  - utils/sync.lua
+  - utils/session.lua
+- Scenes may display results and cache local UI state, but server-approved responses should update durable online state.
+- Guild membership, guild vault, guild jail, auctions, chat, loot reporting, and online player snapshots are server-owned.
+- The client should not invent guild vault items locally.
+
+GUILD MEMBERSHIP RULE
+
+- A player may have one joined guild.
+- A player may also have one created/led guild.
+- These are separate slots.
+- Creating a guild must not require leaving a joined guild.
+- Joining/applying to a guild must require leaving the current joined guild first.
+- A player may not create/lead more than one guild at a time.
+- A guild leader cannot leave their created guild as a normal member.
+
+GUILD SYSTEM RULES
+
+- Guild profile should show average guild level to non-members before they try to loot.
+- Guild average level is based on member/player levels and is used for loot eligibility.
+- Guild loot eligibility: target guild average level must be within 3 levels of the challenger.
+- Guild defenders during loot are 5 guild player snapshots or server bots if needed.
+- Guild loot defenders are players only, not players plus pets.
+- Guild loot combat uses the normal arena battle system.
+- Guild loot success gives a random reward:
+  - 500 gold
+  - a crystal
+  - an augment
+- After guild loot combat exits, show a popup with the loot result.
+- Guild loot failure puts the challenger in that guild's jail for 24 hours.
+- While jailed:
+  - the player cannot loot any guild
+  - 10% of arena gold earnings is taxed to the jail guild
+- Anyone can open a guild's jail view and see who is jailed there.
+- Guild LAND collection sends crystals/augments directly to the server guild vault.
+- Guild LAND rewards do not go to the leader's personal inventory.
+- Guild CREW leader management uses one cog per member row.
+- Crew cog options: captain, lieutenant, general, kick.
+- Kicking a member must update the server and remove the guild from the kicked player's profile on next sync.
+
+COMBAT ARCHITECTURE
+
+- combat.lua calculates combat.
+- arena_battle.lua plays the combat log visually.
+- Combat logic and visuals must stay separated.
+- Combat uses final combat stats after level/base stats and armor/accessory gear are applied.
+- Weapons are combat-time effects and should not be baked into avatar stats if the architecture treats them as combat-only.
+- Combat output is a log; arena scenes replay that log.
+- Replays should show the fight from the beginning, not just the final state.
+
+COMBAT SYSTEM
+
+- Combat is automatic.
+- Combat is speed-ordered/queue-based.
+- Faster units can act more often.
+- RNG may exist for crits, dodges, and proc-style effects.
+- Leader defeat ends the fight.
+- Pets can be targeted while alive.
+- Dead pets are removed from targeting.
+- Dead pets may remain visible as KO/dead sprites.
+- Main arena HP bars track leaders/players only.
+- Pet HP should not contribute to the top/bottom arena HP bars.
+- Player HP bar drains right to left.
+- Enemy HP bar drains left to right.
+- On final defeat, the HP bar should be empty or nearly empty, not visibly 30% full.
+
+ARENA RULES
+
+- Arena battle layout is vertical forced perspective.
+- Enemy team appears near the top, smaller and farther away.
+- Player team appears near the bottom, larger and closer.
+- Pets should frame leaders, not cover them.
+- Keep the center lane open for attacks, damage text, and effects.
+- Player-side sprites face rear when attacking upward.
+- Rear-facing pet sprites must work on mobile and desktop.
+- Fight All uses exactly the 8 visible arena opponents.
+- If the server does not provide 8 real players at the selected level, fill remaining slots with bots.
+- Refresh/settings should show opponents at the selected target level.
+- After Fight All, defeated visible opponents show a red X.
+- Undefeated visible opponents remain active/glowing.
+- Fight All result rows can be tapped to replay that full fight from the beginning.
+
+PET SYSTEM
+
+- Pets do not gain XP.
+- Pets do not level independently.
+- Pets scale from final avatar combat stats using percentage base stats.
+- Pet identity comes from base stat distribution.
+- Pet gems add directly to the pet base stat before scaling.
+- Each pet gem adds +10 to that stat.
+- Total pet base pool cap is 800.
+- Max gems = (800 - totalBaseStats) / 10.
+- Pet stat formula:
+  - petHp  = avatarHp  * (petBaseHp  + petGemHp  * 10) / 100
+  - petAtk = avatarAtk * (petBaseAtk + petGemAtk * 10) / 100
+  - petDef = avatarDef * (petBaseDef + petGemDef * 10) / 100
+  - petSpd = avatarSpd * (petBaseSpd + petGemSpd * 10) / 100
+- Use final player combat stats as avatar stats after level/base stats and armor are applied.
+- Do not use old independent pet exponential growth curves.
+
+GEAR SYSTEM
+
+- Gear defines builds.
+- Armor and accessories affect visible final stats.
+- Weapons are combat-time loadout effects.
+- Weapon rotation is deterministic.
+- Equipped gear should not appear as unequipped inventory items.
+
+INVENTORY / BAG RULES
+
+- Weapons and armor equipped by the player do not appear in the inventory grid as loose items.
+- Empty equipment slots should remain visible.
+- Duplicate inventory items may stack with count overlays.
+- Equip/unequip actions happen through popups.
+- Crystals and augments acquired from server actions must show in the player's inventory/materials.
+- Guild vault items are guild-owned until taken/bought through server-approved actions.
+
+ART / UI RULES
+
+- Pixel art readability comes first.
+- Characters, pets, items, and UI should remain readable on mobile.
+- Avoid overlapping text and controls.
+- Do not allow modal popups to pass taps to the scene behind them.
+- Buttons should clearly show state and action.
+- Use compact operational screens instead of marketing/landing pages.
+
+ENGINE / CODE RULES
+
+- Composer scenes only.
+- Load the player inside scene lifecycle or action handlers.
+- Any table/function used by a handler must be declared before use or forward-declared.
+- Keep changes scoped.
+- Prefer existing repo patterns over new architecture.
+- Server-owned systems should move away from direct local save mutation.
+- Do not rewrite large systems unless the current task truly requires it.
+

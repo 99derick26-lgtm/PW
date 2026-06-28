@@ -1,0 +1,224 @@
+PIXEL WAR SUMMARY
+Last updated: 2026-05-15
+
+Pixel War is a mobile-first vertical cyberpunk pixel RPG built in Solar2D.
+The game combines player progression, gear builds, pets, arena combat, guild systems, and server-backed social/economy loops.
+
+This summary reflects the current game direction.
+Older AFO comparison notes are reference material only and should not override current Pixel War rules.
+
+CORE EXPERIENCE
+
+The player builds an avatar, equips weapons/armor/accessories, raises pets through augment investment, fights arena opponents, joins and leads guilds, chats, manages guild resources, and participates in guild loot/jail systems.
+
+The game should feel like:
+
+- build-focused
+- readable
+- social
+- progression-heavy
+- predictable enough to optimize
+- playful and fast enough for mobile sessions
+
+CURRENT ARCHITECTURE
+
+- Client: Solar2D/Lua with Composer scenes.
+- Server: Node/Express HTTP API used for online account/profile/guild/social/economy features.
+- Local save still exists and is used for caching and offline-style continuity.
+- Server responses should be synced back into local save through utils/sync.lua.
+- Online-sensitive systems should be server-owned.
+
+Important client modules:
+
+- utils/api.lua: HTTP API wrapper.
+- utils/session.lua: auth/session state.
+- utils/sync.lua: merges server-approved player snapshots into local saves.
+- utils/combat.lua: combat calculation and battle log creation.
+- scenes/arena_battle.lua: visual playback of combat logs.
+
+COMBAT
+
+Combat is automatic and log-driven.
+The combat system calculates the fight first, then the battle scene plays that result.
+
+Current combat identity:
+
+- speed-ordered auto battle
+- final stat based
+- pets participate as real units
+- leaders decide battle outcome
+- dead pets leave targeting
+- combat log drives visuals and replay
+
+Arena HP bars currently represent leader/player HP only.
+Pet HP does not contribute to the top or bottom arena HP bars.
+
+ARENA
+
+Arena is the main fight loop.
+
+Current arena behavior:
+
+- Shows 8 opponents on screen.
+- Opponents should match the selected level/difficulty target.
+- Server may provide real player snapshots.
+- Bots fill any missing slots.
+- Fight All fights the same 8 visible opponents.
+- Fight All results popup lists every fight as win/loss.
+- Tapping a Fight All result replays that fight from the beginning.
+- After Fight All, defeated opponents show a red X in the arena grid.
+- Undefeated opponents remain active/glowing.
+
+Arena battle visuals use a vertical forced-perspective layout:
+
+- enemy side near the top
+- player side near the bottom
+- enemy sprites smaller/tighter
+- player sprites larger/wider
+- pets frame leaders instead of covering them
+- center lane remains open for attacks and damage text
+
+PETS
+
+Pets are real combat units.
+They do not have independent XP or level growth.
+
+Current pet scaling:
+
+- Pets scale from the player's final avatar combat stats.
+- Pet base stats are percentage multipliers.
+- Augments/gems add to the pet base stat before scaling.
+- Each augment adds +10 to its stat.
+- Total pet base pool cap is 800.
+- Max augments = (800 - totalBaseStats) / 10.
+
+Formula:
+
+- petHp  = avatarHp  * (petBaseHp  + petGemHp  * 10) / 100
+- petAtk = avatarAtk * (petBaseAtk + petGemAtk * 10) / 100
+- petDef = avatarDef * (petBaseDef + petGemDef * 10) / 100
+- petSpd = avatarSpd * (petBaseSpd + petGemSpd * 10) / 100
+
+Pet identity comes from base stat distribution and player build synergy.
+
+GEAR
+
+Gear defines avatar builds.
+
+- Armor/accessories affect visible final stats.
+- Weapons are combat-time effects/loadout behavior.
+- Weapon rotation is deterministic.
+- Equipped gear should not also appear as loose inventory.
+
+INVENTORY AND MATERIALS
+
+Inventory supports weapons, armor, pets, crystals, augments, and materials.
+
+Important current rule:
+
+- Crystals and augments acquired through server actions must appear in player materials/inventory.
+- Guild vault items remain guild-owned until taken/bought through a server-approved guild flow.
+
+GUILDS
+
+Guilds are server-owned.
+
+Locked membership model:
+
+- A player may have one joined guild.
+- A player may also have one created/led guild.
+- Creating a guild does not require leaving a joined guild.
+- Joining/applying to another guild requires leaving the current joined guild first.
+- A player may not lead more than one created guild.
+
+Current guild features:
+
+- create guild
+- search/view guild
+- join/apply to guild
+- guild home/profile
+- crew roster
+- leader crew management by cog menu
+- roles: captain, lieutenant, general
+- kick member with server update
+- guild chat
+- guild vault
+- guild land
+- guild jail
+- guild loot combat
+
+GUILD LAND
+
+Guild land contains mine/drill slots.
+
+- Crystal mines produce crystals.
+- Augment drills produce augments.
+- Collection sends rewards directly to the server guild vault.
+- Land collection should not put rewards into the leader's personal inventory.
+
+GUILD LOOT
+
+Guild loot is combat against a guild's defenders.
+
+Rules:
+
+- Challenger can loot only if the guild average level is within 3 levels.
+- The average level should be visible on the guild profile before attempting loot.
+- Defenders are 5 guild player snapshots, with bots filling missing slots if needed.
+- Defenders are players only, not players plus pets.
+- Loot uses the normal arena battle scene.
+
+Success:
+
+- Challenger receives random loot:
+  - 500 gold
+  - crystal
+  - augment
+- After exiting battle, a popup shows what was won.
+
+Failure:
+
+- Challenger enters that guild's jail for 24 hours.
+- While jailed, the player cannot loot any guild.
+- While jailed, 10% of arena gold earnings is taxed to the jail guild.
+- Anyone can view a guild's jail roster.
+
+SOCIAL SYSTEMS
+
+Current social direction:
+
+- accounts and profiles
+- friends
+- direct messages
+- guild chat
+- profile viewing
+- online player snapshots
+
+The server should remain the authority for social identity and guild membership.
+
+ART DIRECTION
+
+Pixel War should be readable pixel art with cyberpunk UI.
+
+Priorities:
+
+- mobile readability
+- clear silhouettes
+- no confusing overlap
+- compact HUDs
+- clean iconography
+- strong contrast between interactable and inactive UI
+
+Visual clarity wins over decoration.
+
+CURRENT DEVELOPMENT FOCUS
+
+The current game is in a playable systems-integration phase.
+Main focus areas:
+
+- keeping client/server ownership clean
+- stabilizing guild systems
+- making arena state consistent
+- improving battle readability
+- preserving the current game feel while fixing bugs
+

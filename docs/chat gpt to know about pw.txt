@@ -1,0 +1,60 @@
+CHATGPT / CODEX NOTES FOR PIXEL WAR
+Last updated: 2026-05-15
+
+Read these first:
+
+1. docs/PW locked rules.txt
+2. docs/PW summary.txt
+
+Those files are the current source of truth.
+Older AFO notes are reference only.
+
+Project shape:
+
+- Client scenes live in client/scenes.
+- Client utility modules live in client/utils.
+- Server lives in server/pixelwar server/server.js.
+- Client is Solar2D/Lua.
+- Server is Node/Express HTTP API.
+
+Important Lua scenes:
+
+- home.lua
+- arena.lua
+- arena_battle.lua
+- guild_home.lua
+- guild_view.lua
+- guild_join.lua
+- guild_create.lua
+- guild_loot.lua
+- bag.lua
+- shop.lua
+- pets.lua
+
+Important Lua utils:
+
+- api.lua
+- sync.lua
+- session.lua
+- save.lua
+- stats.lua
+- combat.lua
+- enemy_generator.lua
+- items.lua
+- pets.lua
+- pet_scaler.lua
+- pet_assets.lua
+- spells.lua
+- ui.lua
+
+Rules to remember:
+
+- One joined guild plus one created/led guild is allowed.
+- Creating a guild must not require leaving a joined guild.
+- Joining another guild requires leaving the current joined guild.
+- Guild state, guild vault, jail, loot, chat, and member management are server-owned.
+- Guild LAND collection sends rewards to the server guild vault.
+- Fight All must fight the 8 visible arena opponents.
+- Pets use percentage scaling from final avatar combat stats, not independent level curves.
+- Ignore AFO summary text when it conflicts with current Pixel War rules.
+
