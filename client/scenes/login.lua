@@ -139,17 +139,26 @@ function scene:create(event)
     passBg.strokeWidth = 1.5
     passBg:setStrokeColor(0.18, 0.55, 1.0, 0.65)
 
-    display.newText({
+    local userLabel = display.newText({
         parent = sceneGroup, text = "USER ID",
         x = CX - 108, y = formY - 58,
         font = ui.FONT_BOLD, fontSize = 9, align = "left"
-    }):setFillColor(0.35, 0.78, 1.0)
+    })
+    userLabel:setFillColor(0.35, 0.78, 1.0)
 
-    display.newText({
+    local passLabel = display.newText({
         parent = sceneGroup, text = "PASSWORD",
         x = CX - 100, y = formY - 12,
         font = ui.FONT_BOLD, fontSize = 9, align = "left"
-    }):setFillColor(0.35, 0.78, 1.0)
+    })
+    passLabel:setFillColor(0.35, 0.78, 1.0)
+
+    local modeText = display.newText({
+        parent = sceneGroup, text = "",
+        x = CX, y = formY - 86,
+        font = ui.FONT_BOLD, fontSize = 18, align = "center"
+    })
+    modeText:setFillColor(0.25, 0.85, 1.0)
 
     userField = native.newTextField(CX, formY - 34, 224, 26)
     userField.placeholder = "user id"
@@ -165,27 +174,45 @@ function scene:create(event)
     passField:setTextColor(0.85, 0.95, 1)
 
     local btnY = formY + 70
+    local choiceGroup = display.newGroup()
+    sceneGroup:insert(choiceGroup)
+
+    local formGroup = display.newGroup()
+    sceneGroup:insert(formGroup)
+
+    local function makeButton(parent, x, y, w, h, label, fill)
+        local bg = display.newRoundedRect(parent, x, y, w, h, 10)
+        bg:setFillColor(unpack(fill or { 0.04, 0.18, 0.55 }))
+        bg.strokeWidth = 1.5
+        bg:setStrokeColor(0.2, 0.7, 1, 0.9)
+
+        local txt = display.newText({
+            parent = parent, text = label,
+            x = x, y = y,
+            font = ui.FONT_BOLD, fontSize = 15, align = "center"
+        })
+        txt:setFillColor(0.4, 0.9, 1)
+        txt.isHitTestable = false
+        return bg, txt
+    end
+
+    local registerChoiceBg = nil
+    local loginChoiceBg = nil
+    registerChoiceBg = makeButton(choiceGroup, CX, btnY - 26, 206, 44, "REGISTER", { 0.02, 0.30, 0.20 })
+    loginChoiceBg = makeButton(choiceGroup, CX, btnY + 28, 206, 44, "LOG IN", { 0.04, 0.18, 0.55 })
+
     local btnGlow = display.newRoundedRect(sceneGroup, CX, btnY, 210, 50, 10)
     btnGlow:setFillColor(0.05, 0.4, 1.0, 0.18)
     btnGlow.isHitTestable = false
     flicker(btnGlow, 0.5, 1.0, 160)
 
-    local btnBg = display.newRoundedRect(sceneGroup, CX, btnY, 206, 46, 10)
-    btnBg:setFillColor(0.04, 0.18, 0.55)
-    btnBg.strokeWidth = 1.5
-    btnBg:setStrokeColor(0.2, 0.7, 1, 0.9)
-
-    local btnTxt = display.newText({
-        parent = sceneGroup, text = "LOGIN / CREATE",
-        x = CX, y = btnY,
-        font = ui.FONT_BOLD, fontSize = 16, align = "center"
-    })
-    btnTxt:setFillColor(0.4, 0.9, 1)
-    btnTxt.isHitTestable = false
+    local btnBg, btnTxt = makeButton(formGroup, CX, btnY, 206, 46, "LOG IN", { 0.04, 0.18, 0.55 })
+    local backBg, backTxt = makeButton(formGroup, CX, btnY + 48, 126, 30, "< BACK", { 0.02, 0.08, 0.22 })
+    backTxt.size = 11
 
     local errorText = display.newText({
         parent = sceneGroup, text = "",
-        x = CX, y = btnY + 42,
+        x = CX, y = btnY + 86,
         width = SW - 44,
         font = ui.FONT_BOLD, fontSize = 9,
         align = "center"
@@ -196,7 +223,7 @@ function scene:create(event)
         parent = sceneGroup,
         text = "URL: " .. tostring(session.get().baseUrl or "nil"),
         x = CX,
-        y = btnY + 60,
+        y = btnY + 104,
         width = SW - 44,
         font = ui.FONT,
         fontSize = 8,
@@ -205,6 +232,69 @@ function scene:create(event)
     debugText:setFillColor(0.55, 0.70, 0.92)
 
     local locked = false
+    local authMode = nil
+
+    local function setFormVisible(isVisible)
+        self.authFormVisible = isVisible
+        userBg.isVisible = isVisible
+        passBg.isVisible = isVisible
+        userLabel.isVisible = isVisible
+        passLabel.isVisible = isVisible
+        modeText.isVisible = isVisible
+        formGroup.isVisible = isVisible
+        btnGlow.isVisible = isVisible
+        userField.isVisible = isVisible
+        passField.isVisible = isVisible
+    end
+
+    local function setChoiceVisible(isVisible)
+        choiceGroup.isVisible = isVisible
+    end
+
+    local function showChoice()
+        authMode = nil
+        locked = false
+        setFormVisible(false)
+        setChoiceVisible(true)
+        errorText.text = ""
+        btnBg:setFillColor(0.04, 0.18, 0.55)
+        btnTxt:setFillColor(0.4, 0.9, 1)
+    end
+
+    local function showForm(mode)
+        authMode = mode
+        locked = false
+        setChoiceVisible(false)
+        setFormVisible(true)
+        modeText.text = mode == "register" and "REGISTER" or "LOG IN"
+        btnTxt.text = mode == "register" and "REGISTER" or "LOG IN"
+        btnBg:setFillColor(mode == "register" and 0.02 or 0.04, mode == "register" and 0.30 or 0.18, mode == "register" and 0.20 or 0.55)
+        btnTxt:setFillColor(0.4, 0.9, 1)
+        errorText.text = ""
+        debugText.text = "URL: " .. tostring(session.get().baseUrl or "nil")
+    end
+
+    local function getErrorCode(response)
+        if response and response.data and response.data.error then return response.data.error end
+        return response and (response.error or response.raw) or nil
+    end
+
+    registerChoiceBg:addEventListener("tap", function()
+        showForm("register")
+        return true
+    end)
+
+    loginChoiceBg:addEventListener("tap", function()
+        showForm("login")
+        return true
+    end)
+
+    backBg:addEventListener("tap", function()
+        if locked then return true end
+        showChoice()
+        return true
+    end)
+
     btnBg:addEventListener("tap", function()
         if locked then return true end
 
@@ -229,11 +319,14 @@ function scene:create(event)
         -- even when the player typed a different username/password here.
         session.clear()
 
-        api.auth.login({
+        local payload = {
             userId = userId,
             password = password,
             accountKey = accountKey,
-        }, function(response)
+        }
+        local authCall = authMode == "register" and api.auth.register or api.auth.login
+
+        authCall(payload, function(response)
             if response.ok and response.data then
                 local data = loadAccounts()
                 data.accounts = data.accounts or {}
@@ -259,25 +352,32 @@ function scene:create(event)
                 end)
             else
                 locked = false
-                btnBg:setFillColor(0.04, 0.18, 0.55)
+                btnBg:setFillColor(authMode == "register" and 0.02 or 0.04, authMode == "register" and 0.30 or 0.18, authMode == "register" and 0.20 or 0.55)
                 btnTxt:setFillColor(0.4, 0.9, 1)
                 errorText:setFillColor(1.0, 0.35, 0.35)
+                local errorCode = getErrorCode(response)
                 if response.status == 401 then
                     errorText.text = "WRONG PASSWORD"
                 elseif response.status == 404 then
                     errorText.text = "ACCOUNT NOT FOUND"
                 elseif response.status == 409 then
-                    errorText.text = "ACCOUNT EXISTS"
+                    if errorCode == "display_name_taken" then
+                        errorText.text = "NAME TAKEN"
+                    else
+                        errorText.text = "USER ID ALREADY REGISTERED"
+                    end
                 else
                     errorText.text = "SERVER OFFLINE"
                 end
                 debugText.text = "URL: " .. tostring(session.get().baseUrl or "nil")
                     .. "  STATUS: " .. tostring(response.status or 0)
-                    .. "  ERROR: " .. tostring(response.error or response.raw or "nil")
+                    .. "  ERROR: " .. tostring(errorCode or "nil")
             end
         end)
         return true
     end)
+
+    showChoice()
 
     display.newText({
         parent = sceneGroup,
@@ -289,8 +389,8 @@ end
 
 function scene:show(event)
     if event.phase ~= "did" then return end
-    if userField then userField.isVisible = true end
-    if passField then passField.isVisible = true end
+    if userField then userField.isVisible = self.authFormVisible == true end
+    if passField then passField.isVisible = self.authFormVisible == true end
 end
 
 function scene:hide(event)
