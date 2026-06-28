@@ -102,6 +102,7 @@ local function showNameEditOverlay(sg, currentName, onConfirm)
 
     local nameField = native.newTextField(CX, CY-18, SW*0.64, 34)
     nameField.text        = currentName or ""
+    nameField.placeholder = "new username"
     nameField.font        = native.newFont(ui.FONT_BOLD, 13)
     nameField.hasBackground = false
     nameField:setTextColor(0.9, 0.95, 1)
@@ -121,6 +122,9 @@ local function showNameEditOverlay(sg, currentName, onConfirm)
 
     nameField:addEventListener("userInput", function(event)
         if event.phase == "began" then
+            if nameField and nameField.text == currentName then
+                nameField.text = ""
+            end
             moveEditor(true)
         elseif event.phase == "submitted" then
             moveEditor(false)

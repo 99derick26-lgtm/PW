@@ -117,6 +117,17 @@ local function applyTournamentResponse(response)
     end
 end
 
+local function applyTournamentStatusToPlayer(player, response)
+    if response and response.ok and response.data then
+        tournamentStatus = response.data.tournaments or tournamentStatus
+        if response.data.player and response.data.player.tournaments then
+            player.tournaments = response.data.player.tournaments
+        end
+    end
+    saveUtil.save(player)
+    sync.pushPlayerSnapshot(player)
+end
+
 local function getTournamentInfo(mode, localState)
     local info = tournamentStatus and tournamentStatus[mode]
     return {
@@ -738,7 +749,7 @@ local function buildSingleTab(group)
         showToast(p.tournaments.single.joined and "Joined the single tournament queue." or "Left the single tournament queue.", false)
         if p.tournaments.single.joined and processEnrollTask(p, "You joined the single tournament queue.") then
             api.tournaments.setJoined("single", true, function(response)
-                applyTournamentResponse(response)
+                applyTournamentStatusToPlayer(p, response)
                 rebuild()
             end)
             return true
@@ -845,7 +856,7 @@ local function buildCrewTab(group)
         showToast(p.tournaments.crew.joined and "Joined the crew tournament queue." or "Left the crew tournament queue.", false)
         if p.tournaments.crew.joined and processEnrollTask(p, "You joined the crew tournament queue.") then
             api.tournaments.setJoined("crew", true, function(response)
-                applyTournamentResponse(response)
+                applyTournamentStatusToPlayer(p, response)
                 rebuild()
             end)
             return true
