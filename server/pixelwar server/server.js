@@ -13,13 +13,17 @@ const dataPath = path.join(__dirname, "pixelwar-data.json");
 
 app.use(express.json({ limit: "2mb" }));
 
-const pool = new Pool({
-  user: process.env.DB_USER,
-  host: process.env.DB_HOST,
-  database: process.env.DB_NAME,
-  password: process.env.DB_PASSWORD,
-  port: Number(process.env.DB_PORT) || 5432,
-});
+const poolConfig = process.env.DATABASE_URL
+  ? { connectionString: process.env.DATABASE_URL }
+  : {
+      user: process.env.DB_USER,
+      host: process.env.DB_HOST,
+      database: process.env.DB_NAME,
+      password: process.env.DB_PASSWORD,
+      port: Number(process.env.DB_PORT) || 5432,
+    };
+
+const pool = new Pool(poolConfig);
 
 function slug(value) {
   return String(value || "")
