@@ -10,6 +10,7 @@ const app = express();
 const port = process.env.PORT || 3000;
 const host = process.env.HOST || "0.0.0.0";
 const dataPath = path.join(__dirname, "pixelwar-data.json");
+const useDatabaseState = Boolean(process.env.DATABASE_URL);
 
 app.use(express.json({ limit: "2mb" }));
 
@@ -24,6 +25,7 @@ const poolConfig = process.env.DATABASE_URL
     };
 
 const pool = new Pool(poolConfig);
+let saveQueue = Promise.resolve();
 
 function slug(value) {
   return String(value || "")
@@ -167,35 +169,97 @@ function defaultState() {
   };
 }
 
-let state = loadState();
-if (Object.values(state.players || {}).some(repairInflatedHp)) {
-  saveState();
-}
-if (Object.values(state.accounts || {}).some((account) => {
-  if (!account || !account.password || account.passwordHash) return false;
-  setAccountPassword(account, account.password);
-  account.passwordMigratedAt = new Date().toISOString();
-  return true;
-})) {
-  saveState();
+let state = defaultState();
+
+function mergeState(savedState) {
+  return { ...defaultState(), ...(savedState || {}) };
 }
 
-function loadState() {
+function loadStateFromFile() {
   try {
     if (fs.existsSync(dataPath)) {
-      return { ...defaultState(), ...JSON.parse(fs.readFileSync(dataPath, "utf8")) };
+      return mergeState(JSON.parse(fs.readFileSync(dataPath, "utf8")));
     }
   } catch (error) {
     console.error("Failed to load data file:", error);
   }
 
   const empty = defaultState();
-  saveState(empty);
+  fs.writeFileSync(dataPath, JSON.stringify(empty, null, 2));
   return empty;
 }
 
+async function ensureStateTable() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS app_state (
+      key TEXT PRIMARY KEY,
+      data JSONB NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+}
+
+async function loadStateFromDatabase() {
+  await ensureStateTable();
+  const result = await pool.query("SELECT data FROM app_state WHERE key = $1", ["main"]);
+  if (result.rows[0] && result.rows[0].data) {
+    return mergeState(result.rows[0].data);
+  }
+
+  const seededState = fs.existsSync(dataPath) ? loadStateFromFile() : defaultState();
+  await saveStateToDatabase(seededState);
+  return seededState;
+}
+
+async function loadState() {
+  if (useDatabaseState) {
+    return loadStateFromDatabase();
+  }
+  return loadStateFromFile();
+}
+
+async function saveStateToDatabase(nextState) {
+  await ensureStateTable();
+  await pool.query(
+    `
+      INSERT INTO app_state (key, data, updated_at)
+      VALUES ($1, $2, NOW())
+      ON CONFLICT (key)
+      DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()
+    `,
+    ["main", nextState]
+  );
+}
+
 function saveState(nextState = state) {
-  fs.writeFileSync(dataPath, JSON.stringify(nextState, null, 2));
+  const stateSnapshot = snapshotValue(nextState);
+  if (!useDatabaseState) {
+    fs.writeFileSync(dataPath, JSON.stringify(stateSnapshot, null, 2));
+    return;
+  }
+
+  saveQueue = saveQueue
+    .then(() => saveStateToDatabase(stateSnapshot))
+    .catch((error) => {
+      console.error("Failed to save state to database:", error);
+    });
+}
+
+async function initializeState() {
+  state = await loadState();
+  let needsSave = false;
+  if (Object.values(state.players || {}).some(repairInflatedHp)) {
+    needsSave = true;
+  }
+  if (Object.values(state.accounts || {}).some((account) => {
+    if (!account || !account.password || account.passwordHash) return false;
+    setAccountPassword(account, account.password);
+    account.passwordMigratedAt = new Date().toISOString();
+    return true;
+  })) {
+    needsSave = true;
+  }
+  if (needsSave) saveState();
 }
 
 function snapshotValue(value) {
@@ -1388,6 +1452,21 @@ app.get("/debug/players", requireDebugAccess, (req, res) => {
     currentScene: player.currentScene || "",
   }));
   res.json({ ok: true, count: players.length, players });
+});
+
+app.get("/debug/state", requireDebugAccess, (req, res) => {
+  res.json({
+    ok: true,
+    persistence: useDatabaseState ? "postgres" : "file",
+    counts: {
+      accounts: Object.keys(state.accounts || {}).length,
+      players: Object.keys(state.players || {}).length,
+      guilds: Object.keys(state.guilds || {}).length,
+      threads: Object.keys(state.threads || {}).length,
+      notifications: Object.keys(state.notifications || {}).length,
+    },
+    state,
+  });
 });
 
 app.get("/debug/guilds", requireDebugAccess, (req, res) => {
@@ -2761,6 +2840,13 @@ app.post("/v1/chat/world", (req, res) => {
   res.json({ ok: true });
 });
 
-app.listen(port, host, () => {
-  console.log(`Server running at http://${host}:${port}`);
-});
+initializeState()
+  .then(() => {
+    app.listen(port, host, () => {
+      console.log(`Server running at http://${host}:${port}`);
+    });
+  })
+  .catch((error) => {
+    console.error("Failed to initialize server state:", error);
+    process.exit(1);
+  });
