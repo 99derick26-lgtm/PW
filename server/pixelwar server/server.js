@@ -1763,7 +1763,13 @@ app.get("/", (req, res) => {
 });
 
 app.get("/health", (req, res) => {
-  res.json({ ok: true, service: "pixel-wars-server", routeVersion: "notifications-v1", time: new Date().toISOString() });
+  res.json({
+    ok: true,
+    service: "pixel-wars-server",
+    releaseVersion: "0.82",
+    routeVersion: "notifications-v1",
+    time: new Date().toISOString(),
+  });
 });
 
 app.get("/db-test", async (req, res) => {
