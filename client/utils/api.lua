@@ -291,6 +291,22 @@ function M.guilds.declareWar(guildId, payload, callback)
     return M.post("/v1/guilds/" .. tostring(guildId) .. "/wars", payload or {}, callback)
 end
 
+function M.guilds.claimLeagueWin(guildId, payload, callback)
+    return M.post("/v1/guilds/" .. tostring(guildId) .. "/league/win", payload or {}, callback)
+end
+
+function M.guilds.reportLeagueLoss(guildId, payload, callback)
+    return M.post("/v1/guilds/" .. tostring(guildId) .. "/league/loss", payload or {}, callback)
+end
+
+function M.guilds.claimLeagueSlot(guildId, slot, callback)
+    return M.post("/v1/guilds/" .. tostring(guildId) .. "/league/slots/" .. tostring(slot) .. "/claim", {}, callback)
+end
+
+function M.guilds.reportLeagueChallenge(guildId, slot, payload, callback)
+    return M.post("/v1/guilds/" .. tostring(guildId) .. "/league/slots/" .. tostring(slot) .. "/challenge", payload or {}, callback)
+end
+
 function M.guilds.jail(guildId, callback)
     return M.get("/v1/guilds/" .. tostring(guildId) .. "/jail", callback)
 end
@@ -337,6 +353,19 @@ end
 
 function M.guilds.bidAuction(guildId, auctionId, payload, callback)
     return M.post("/v1/guilds/" .. tostring(guildId) .. "/auctions/" .. tostring(auctionId) .. "/bid", payload or {}, callback)
+end
+
+M.auctions = {}
+
+function M.auctions.public(page, pageSize, callback)
+    local query = "?page=" .. tostring(page or 1)
+        .. "&pageSize=" .. tostring(pageSize or 12)
+        .. "&t=" .. tostring(os.time())
+    return M.get("/v1/auctions/public" .. query, callback)
+end
+
+function M.auctions.bidPublic(auctionId, payload, callback)
+    return M.post("/v1/auctions/public/" .. tostring(auctionId) .. "/bid", payload or {}, callback)
 end
 
 M.chat = {}
@@ -391,6 +420,10 @@ end
 
 function M.squad.liberate(payload, callback)
     return M.post("/v1/squad/liberate", payload or {}, callback)
+end
+
+function M.squad.rebel(payload, callback)
+    return M.post("/v1/squad/rebel", payload or {}, callback)
 end
 
 function M.squad.reportFightReward(payload, callback)

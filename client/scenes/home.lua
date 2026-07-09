@@ -41,7 +41,7 @@ local CX = display.contentCenterX
 local CY = display.contentCenterY
 
 local ENERGY_MAX      = 30
-local ENERGY_INTERVAL = 16 * 60
+local ENERGY_INTERVAL = 10 * 60
 
 -------------------------------------------------
 -- DYNAMIC UI REFS
@@ -1223,17 +1223,16 @@ function scene:create(event)
     local socialPanelH = (row2Y + btnH * 0.5 + 12) - (socialTop + 8)
 
     local socialPanel = display.newRoundedRect(sg, CX, socialTop + socialPanelH * 0.5, screenW - 20, socialPanelH, 16)
-    socialPanel:setFillColor(0.02, 0.05, 0.14, 0.86)
-    socialPanel.strokeWidth = 1.5
-    socialPanel:setStrokeColor(0.18, 0.50, 0.90, 0.44)
+    socialPanel:setFillColor(0, 0, 0, 0)
+    socialPanel.strokeWidth = 0
     socialPanel.isHitTestable = false
 
     local socialDividerH = display.newRect(sg, CX, row1Y + btnH * 0.5 + btnGap * 0.5, screenW - 44, 1)
-    socialDividerH:setFillColor(0.18, 0.48, 0.82, 0.18)
+    socialDividerH:setFillColor(0, 0, 0, 0)
     socialDividerH.isHitTestable = false
 
     local socialDividerV = display.newRect(sg, CX, socialTop + socialPanelH * 0.5 + 8, 1, socialPanelH - 26)
-    socialDividerV:setFillColor(0.18, 0.48, 0.82, 0.16)
+    socialDividerV:setFillColor(0, 0, 0, 0)
     socialDividerV.isHitTestable = false
 
     self._guildBtnLayout = { btnW=btnW, btnH=btnH, row1Y=row1Y, leftX=leftX, rightX=rightX }
@@ -1245,7 +1244,13 @@ function scene:create(event)
         composer.gotoScene("scenes.messages", { effect="slideLeft", time=220 })
     end)
 
-    local chatHit = display.newRect(sg, CX, chatY, screenW - 20, 24)
+    local chatPanel = display.newRoundedRect(sg, CX, chatY, screenW - 20, 26, 8)
+    chatPanel:setFillColor(0.015, 0.035, 0.10, 0.80)
+    chatPanel.strokeWidth = 1
+    chatPanel:setStrokeColor(0.12, 0.40, 0.76, 0.34)
+    chatPanel.isHitTestable = false
+
+    local chatHit = display.newRect(sg, CX, chatY, screenW - 20, 26)
     chatHit:setFillColor(0, 0, 0, 0.01)
     chatHit.isHitTestable = true
     self._chatBg = chatHit
@@ -1283,7 +1288,7 @@ function scene:create(event)
         return true
     end)
 
-    local matBtnY = row2Y + btnH * 0.5 + 50
+    local matBtnY = row2Y + btnH * 0.5 + 86
     local matBtnW = screenW - 20
     local matH    = 48
     local matGlow = display.newRoundedRect(sg, CX, matBtnY, matBtnW + 8, matH + 8, 14)
@@ -1350,7 +1355,7 @@ function scene:create(event)
         return true
     end)
 
-    local taskIconsY = SH - 100
+    local taskIconsY = row2Y + btnH * 0.5 + 34
     self._taskIconsY   = taskIconsY
     self._taskIconGroup = nil
 
@@ -1359,8 +1364,9 @@ function scene:create(event)
 
     local bellBtnX = 42
     local bellCircle = display.newRoundedRect(sg, CX, notifY, screenW - 20, 28, 9)
-    bellCircle:setFillColor(0, 0, 0, 0.01)
-    bellCircle.strokeWidth = 0
+    bellCircle:setFillColor(0.015, 0.035, 0.10, 0.82)
+    bellCircle.strokeWidth = 1
+    bellCircle:setStrokeColor(0.12, 0.40, 0.76, 0.34)
     self._bellCircle = bellCircle
 
     local notifAccent = display.newRect(sg, 26, notifY, 2, 18)
@@ -1819,15 +1825,15 @@ function scene:show(event)
     end)
 
     local taskY   = self._taskIconsY or (SH - 190)
-    local iconSz  = 34
+    local iconSz  = 44
     local grp     = display.newGroup()
     self.view:insert(grp)
     self._taskIconGroup = grp
 
-    local taskOffsets = { -56, 56, -100, 100 }
+    local taskOffsets = { -82, -28, 28, 82 }
 
     if false and #activeTasks == 0 then
-        local doneBg = display.newRoundedRect(grp, CX, taskY, iconSz, iconSz, 10)
+        local doneBg = display.newRoundedRect(grp, CX, taskY, iconSz, iconSz, 12)
         doneBg:setFillColor(0.04, 0.22, 0.08, 0.95)
         doneBg.strokeWidth = 1.5; doneBg:setStrokeColor(0.22, 0.88, 0.32, 0.80)
         display.newText({ parent=grp, text="✓",
@@ -1839,7 +1845,7 @@ function scene:show(event)
             local ix = CX + taskOffsets[i]
             local claimable = item.state.progress >= item.def.goal
 
-            local pulse = display.newRoundedRect(grp, ix, taskY, iconSz + 4, iconSz + 4, 12)
+            local pulse = display.newRoundedRect(grp, ix, taskY, iconSz + 6, iconSz + 6, 14)
             pulse:setFillColor(0, 0, 0, 0)
             pulse.strokeWidth = 2
             pulse:setStrokeColor(claimable and 0.30 or 0.20, claimable and 1.0 or 0.62, claimable and 0.38 or 1.0, 0.90)
@@ -1847,12 +1853,12 @@ function scene:show(event)
                 alpha = 0.05,
                 xScale = 1.18,
                 yScale = 1.18,
-                time = 900 + i * 60,
+                time = math.floor((900 + i * 60) / 0.30),
                 iterations = 0,
                 transition = easing.outQuad
             })
 
-            local iconBg = display.newRoundedRect(grp, ix, taskY, iconSz, iconSz, 10)
+            local iconBg = display.newRoundedRect(grp, ix, taskY, iconSz, iconSz, 12)
             if claimable then
                 iconBg:setFillColor(0.04, 0.26, 0.08, 0.97)
                 iconBg.strokeWidth = 2; iconBg:setStrokeColor(0.25, 1.0, 0.30, 0.90)
@@ -1865,7 +1871,7 @@ function scene:show(event)
             local okIcon, iconImg = pcall(display.newImageRect,
                 grp,
                 "assets/sprites/ui/icons/" .. iconName .. ".png",
-                18, 18
+                26, 26
             )
             if okIcon and iconImg then
                 iconImg.x = ix
@@ -1880,7 +1886,7 @@ function scene:show(event)
             end
 
             if not claimable then
-                flicker(iconBg, 0.72, 1.0, 1200+math.random(0,400))
+                flicker(iconBg, 0.72, 1.0, math.floor((1200 + math.random(0, 400)) / 0.30))
             end
 
             local capView = self.view

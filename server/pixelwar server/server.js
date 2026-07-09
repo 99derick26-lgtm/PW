@@ -164,6 +164,8 @@ function defaultState() {
     pvpHistory: {},
     notifications: {},
     tournaments: {},
+    guildLeagueTournament: null,
+    publicAuctions: [],
     auditLogs: [],
     nextProfileNumber: 1,
   };
@@ -248,6 +250,10 @@ function saveState(nextState = state) {
 async function initializeState() {
   state = await loadState();
   let needsSave = false;
+  if (!state.guildLeagueTournament || !state.guildLeagueTournament.nextStartsAt) {
+    ensureGuildLeagueTournament();
+    needsSave = true;
+  }
   if (Object.values(state.players || {}).some(repairInflatedHp)) {
     needsSave = true;
   }
@@ -394,6 +400,46 @@ function collectBotSquadGold(player) {
   }
   if (gained > 0) player.gold = (Number(player.gold) || 0) + gained;
   return gained;
+}
+
+function squadRivalForPlayer(player) {
+  if (!player || !player.playerId) return null;
+  let best = null;
+  for (const owner of Object.values(state.players || {})) {
+    if (!owner || owner.playerId === player.playerId) continue;
+    const squad = ensureSquad(owner);
+    for (const member of squad.conquered) {
+      if (member.targetPlayerId !== player.playerId) continue;
+      const goldGiven = Number(member.contributionGold) || 0;
+      const candidate = {
+        playerId: owner.playerId,
+        name: notificationPlayerName(owner),
+        visualId: playerSkinId(owner),
+        goldGiven,
+        taxRate: clampTaxRate(member.taxRate),
+        conqueredAt: member.conqueredAt || null,
+      };
+      if (!best || goldGiven > best.goldGiven) best = candidate;
+    }
+  }
+  return best;
+}
+
+function activeSquadOwnerForPlayer(playerId) {
+  const wanted = String(playerId || "").trim();
+  if (!wanted) return null;
+  for (const owner of Object.values(state.players || {})) {
+    if (!owner || owner.playerId === wanted) continue;
+    const squad = ensureSquad(owner);
+    const member = squad.conquered.find((entry) => entry.targetPlayerId === wanted);
+    if (member) return { owner, squad, member };
+  }
+  return null;
+}
+
+function removeSquadMemberByRef(squad, member) {
+  if (!squad || !Array.isArray(squad.conquered)) return;
+  squad.conquered = squad.conquered.filter((entry) => entry !== member);
 }
 
 function normalizeProfileCounter() {
@@ -577,6 +623,7 @@ function fullPlayer(player) {
   repairInflatedHp(player);
   reconcilePlayerGuilds(player);
   const snapshot = player.snapshot || {};
+  const activeRival = squadRivalForPlayer(player);
   return {
     ...snapshot,
     ...player,
@@ -592,6 +639,7 @@ function fullPlayer(player) {
     pets: player.pets || [],
     squad: ensureSquad(player),
     tournaments: ensureTournamentState(player),
+    rival: activeRival || false,
   };
 }
 
@@ -774,11 +822,15 @@ function publicGuild(guild) {
     members: members.length,
     maxMembers: guild.maxMembers || 20,
     gold: directGold + vaultedGold,
+    rep: Number(guild.rep) || 0,
     level: guild.level || 1,
     averageLevel: guildAverageLevel(guild),
     jailCount: publicGuildJail(guild).length,
     isPublic: guild.isPublic !== false,
     desc: guild.desc || "",
+    leagueSlots: publicGuildLeagueSlots(guild),
+    leagueHistory: ensureGuildLeague(guild).history,
+    leagueTournament: guildLeagueTournamentView(guild.guildId),
   };
 }
 
@@ -793,6 +845,10 @@ function publicGuildMember(player, guild) {
     online: (player.status || "online") === "online",
     skinId,
     appearance: { skinId },
+    attack: snapshot.attack || player.attack || 100,
+    defense: snapshot.defense || player.defense || 100,
+    speed: snapshot.speed || player.speed || 100,
+    hp: snapshot.hp || player.hp || 100,
   };
 }
 
@@ -812,6 +868,164 @@ function guildAverageLevel(guild) {
   return Math.max(1, Math.round(levels.reduce((sum, level) => sum + level, 0) / levels.length));
 }
 
+const GUILD_LEAGUE_LEADER_SLOT = 3;
+const GUILD_LEAGUE_CYCLE_MS = 24 * 60 * 60 * 1000;
+const GUILD_LEAGUE_ROUND_MS = 60 * 1000;
+
+function ensureGuildLeague(guild) {
+  guild.league = guild.league && typeof guild.league === "object" ? guild.league : {};
+  guild.league.slots = Array.isArray(guild.league.slots) ? guild.league.slots : [];
+  guild.league.history = Array.isArray(guild.league.history) ? guild.league.history : [];
+  guild.members = Array.isArray(guild.members) ? guild.members : [];
+
+  for (let i = 0; i < 5; i += 1) {
+    const slot = guild.league.slots[i];
+    if (slot && slot.playerId && !guild.members.includes(slot.playerId)) guild.league.slots[i] = null;
+  }
+  if (guild.leaderPlayerId) {
+    guild.league.slots[GUILD_LEAGUE_LEADER_SLOT - 1] = {
+      playerId: guild.leaderPlayerId,
+      locked: true,
+      joinedAt: guild.createdAt || new Date().toISOString(),
+    };
+  }
+  guild.league.slots = guild.league.slots.slice(0, 5);
+  while (guild.league.slots.length < 5) guild.league.slots.push(null);
+  return guild.league;
+}
+
+function publicGuildLeagueFighter(player, guild) {
+  if (!player) return null;
+  return publicGuildMember(player, guild);
+}
+
+function publicGuildLeagueSlots(guild) {
+  const league = ensureGuildLeague(guild);
+  return league.slots.map((slot, index) => {
+    const player = slot && slot.playerId ? state.players[slot.playerId] : null;
+    return {
+      slot: index + 1,
+      locked: index + 1 === GUILD_LEAGUE_LEADER_SLOT,
+      holder: publicGuildLeagueFighter(player, guild),
+      joinedAt: slot && slot.joinedAt,
+    };
+  });
+}
+
+function addGuildLeagueHistory(guild, title, body, kind) {
+  const league = ensureGuildLeague(guild);
+  league.history.unshift({
+    id: `league_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+    title,
+    body,
+    kind: kind || "league",
+    createdAt: new Date().toISOString(),
+  });
+  league.history = league.history.slice(0, 40);
+  return league.history;
+}
+
+function ensureGuildLeagueTournament() {
+  const tournament = state.guildLeagueTournament && typeof state.guildLeagueTournament === "object"
+    ? state.guildLeagueTournament
+    : {};
+  if (!tournament.nextStartsAt) {
+    tournament.nextStartsAt = new Date(Date.now() + GUILD_LEAGUE_CYCLE_MS).toISOString();
+  }
+  tournament.active = tournament.active && typeof tournament.active === "object" ? tournament.active : null;
+  state.guildLeagueTournament = tournament;
+  return tournament;
+}
+
+function guildLeagueTeamStrength(guild) {
+  const league = ensureGuildLeague(guild);
+  return league.slots.reduce((total, slot) => {
+    const player = slot && slot.playerId ? state.players[slot.playerId] : null;
+    if (!player) return total;
+    const snapshot = player.snapshot || {};
+    const level = Number(snapshot.level || player.level) || 1;
+    const stats = ["attack", "defense", "speed", "hp"]
+      .reduce((sum, key) => sum + (Number(snapshot[key] || player[key]) || 100), 0);
+    return total + level * 20 + stats;
+  }, 0);
+}
+
+function guildLeagueTournamentView(guildId) {
+  const tournament = ensureGuildLeagueTournament();
+  const active = tournament.active;
+  return {
+    nextStartsAt: tournament.nextStartsAt,
+    active: Boolean(active),
+    round: active ? active.round : 0,
+    nextRoundAt: active ? active.nextRoundAt : null,
+    guildsRemaining: active && Array.isArray(active.entrants) ? active.entrants.length : 0,
+    participating: Boolean(active && active.entrants && active.entrants.includes(guildId)),
+  };
+}
+
+function materializeGuildLeagueTournament(now = Date.now()) {
+  const tournament = ensureGuildLeagueTournament();
+  let changed = false;
+
+  if (!tournament.active && Date.parse(tournament.nextStartsAt || "") <= now) {
+    const entrants = Object.values(state.guilds || {})
+      .filter((guild) => guild && guild.guildId)
+      .map((guild) => guild.guildId);
+    tournament.active = {
+      tournamentId: `guild_league_${now.toString(36)}`,
+      entrants,
+      round: 1,
+      startedAt: new Date(now).toISOString(),
+      nextRoundAt: new Date(now + GUILD_LEAGUE_ROUND_MS).toISOString(),
+    };
+    for (const guildId of entrants) {
+      const guild = state.guilds[guildId];
+      addGuildLeagueHistory(guild, "LEAGUE STARTED", `${entrants.length} guilds entered this league.`, "league");
+    }
+    tournament.nextStartsAt = new Date(now + GUILD_LEAGUE_CYCLE_MS).toISOString();
+    changed = true;
+  }
+
+  const active = tournament.active;
+  while (active && Date.parse(active.nextRoundAt || "") <= now) {
+    const entrants = Array.isArray(active.entrants) ? active.entrants.filter((id) => state.guilds[id]) : [];
+    if (entrants.length <= 1) {
+      const champion = entrants[0] && state.guilds[entrants[0]];
+      if (champion) {
+        champion.gold = (Number(champion.gold) || 0) + 2000;
+        champion.rep = (Number(champion.rep) || 0) + 5;
+        addGuildLeagueHistory(champion, "LEAGUE WINNER", `${champion.name} won 2000 gold and 5 reputation.`, "winner");
+      }
+      tournament.active = null;
+      changed = true;
+      break;
+    }
+
+    const advancing = [];
+    for (let index = 0; index < entrants.length; index += 2) {
+      const left = state.guilds[entrants[index]];
+      const right = entrants[index + 1] ? state.guilds[entrants[index + 1]] : null;
+      if (!right) {
+        advancing.push(left.guildId);
+        continue;
+      }
+      const leftScore = guildLeagueTeamStrength(left) * (0.9 + Math.random() * 0.2);
+      const rightScore = guildLeagueTeamStrength(right) * (0.9 + Math.random() * 0.2);
+      const winner = leftScore >= rightScore ? left : right;
+      const loser = winner === left ? right : left;
+      advancing.push(winner.guildId);
+      addGuildLeagueHistory(winner, "LEAGUE VICTORY", `${winner.name} advances. ${Math.ceil(entrants.length / 2)} guilds remaining.`, "victory");
+      addGuildLeagueHistory(loser, "LEAGUE DEFEAT", `${loser.name} was eliminated from this league.`, "defeat");
+    }
+    active.entrants = advancing;
+    active.round += 1;
+    active.nextRoundAt = new Date(Date.parse(active.nextRoundAt) + GUILD_LEAGUE_ROUND_MS).toISOString();
+    changed = true;
+  }
+
+  return changed;
+}
+
 const GUILD_JAIL_MS = 24 * 60 * 60 * 1000;
 
 function ensureGuildJail(guild) {
@@ -825,9 +1039,11 @@ function publicGuildJail(guild) {
   return ensureGuildJail(guild).map((entry) => ({
     playerId: entry.playerId,
     name: entry.name || "Player",
+    skinId: entry.skinId,
     capturedAt: entry.capturedAt,
     releaseAt: entry.releaseAt,
     taxRate: entry.taxRate || 0.10,
+    taxGold: Number(entry.taxGold) || 0,
   }));
 }
 
@@ -851,9 +1067,13 @@ function jailPlayerInGuild(guild, player) {
     jail.push(entry);
   }
   entry.name = player.displayName || "Player";
+  entry.skinId = player.snapshot && player.snapshot.appearance && player.snapshot.appearance.skinId
+    ? player.snapshot.appearance.skinId
+    : (player.appearance && player.appearance.skinId) || player.skinId;
   entry.capturedAt = new Date(now).toISOString();
   entry.releaseAt = releaseAt;
   entry.taxRate = 0.10;
+  entry.taxGold = Number(entry.taxGold) || 0;
   return entry;
 }
 
@@ -925,6 +1145,7 @@ function guildWarFighterSnapshot(player, index, side) {
   const snap = fullPlayer(player);
   const equipped = snap.equipped || {};
   const idPrefix = side === "player" ? "player" : "enemy";
+  const allowedSpells = (snap.spells || []).filter((spellId) => spellId !== "call_a_friend");
   return {
     ...snap,
     id: `${idPrefix}:leader:${index + 1}`,
@@ -942,7 +1163,7 @@ function guildWarFighterSnapshot(player, index, side) {
     pets: [],
     currentWeaponIndex: snap.currentWeaponIndex || 1,
     weaponUsesLeft: snap.weaponUsesLeft,
-    spells: snap.spells || [],
+    spells: allowedSpells,
   };
 }
 
@@ -994,7 +1215,44 @@ function pickGuildWarTeam(guild, side, seed) {
   return picked.map((player, index) => guildWarFighterSnapshot(player, index, side));
 }
 
+function guildMemberPoolByLevel(guild) {
+  guild.members = Array.isArray(guild.members) ? guild.members : [];
+  return guild.members
+    .map((id) => state.players[id])
+    .filter(Boolean)
+    .sort((a, b) => {
+      const aLevel = Number((a.snapshot && a.snapshot.level) || a.level || 1);
+      const bLevel = Number((b.snapshot && b.snapshot.level) || b.level || 1);
+      if (aLevel !== bLevel) return bLevel - aLevel;
+      return notificationPlayerName(a).localeCompare(notificationPlayerName(b));
+    });
+}
+
+function buildGuildWarRounds(attacker, defender) {
+  const attackerPool = guildMemberPoolByLevel(attacker);
+  const defenderPool = guildMemberPoolByLevel(defender);
+  const maxRounds = Math.ceil(Math.max(attackerPool.length, defenderPool.length) / 5);
+  const rounds = [];
+  for (let index = 0; index < maxRounds; index += 1) {
+    const attackers = attackerPool.slice(index * 5, index * 5 + 5)
+      .map((player, fighterIndex) => guildWarFighterSnapshot(player, fighterIndex, "player"));
+    const defenders = defenderPool.slice(index * 5, index * 5 + 5)
+      .map((player, fighterIndex) => guildWarFighterSnapshot(player, fighterIndex, "enemy"));
+    if (attackers.length === 0 || defenders.length === 0) continue;
+    rounds.push({
+      round: index + 1,
+      label: `${index * 5 + 1}-${index * 5 + Math.max(attackers.length, defenders.length)}`,
+      attackers,
+      defenders,
+      winnerGuildId: null,
+      status: "ready",
+    });
+  }
+  return rounds;
+}
+
 function publicGuildWar(war) {
+  const rounds = Array.isArray(war.rounds) ? war.rounds : [];
   return {
     warId: war.warId,
     createdAt: war.createdAt,
@@ -1005,8 +1263,9 @@ function publicGuildWar(war) {
     attackerGuildName: war.attackerGuildName,
     defenderGuildId: war.defenderGuildId,
     defenderGuildName: war.defenderGuildName,
-    attackers: war.attackers || [],
-    defenders: war.defenders || [],
+    attackers: war.attackers || (rounds[0] && rounds[0].attackers) || [],
+    defenders: war.defenders || (rounds[0] && rounds[0].defenders) || [],
+    rounds,
   };
 }
 
@@ -1303,6 +1562,91 @@ function publicGuildEconomy(guild) {
     contributions,
     auctions: guild.auctions,
   };
+}
+
+const PUBLIC_AUCTION_DURATION_MS = 12 * 60 * 60 * 1000;
+const PUBLIC_AUCTION_ANTI_SNIPE_MS = 20 * 1000;
+const PUBLIC_AUCTION_BID_STEP = 250;
+const GUILD_AUCTION_BID_STEP = 100;
+
+function fixedAuctionPrice(key, type, isPublicAuction, savedItem, requestedPrice) {
+  const crystalPrices = {
+    crystal_green: [1500, 2000],
+    crystal_blue: [2000, 2500],
+    crystal_orange: [2500, 3000],
+    crystal_purple: [3000, 3500],
+  };
+  if (crystalPrices[key]) return crystalPrices[key][isPublicAuction ? 1 : 0];
+  const normalizedType = String(type || savedItem && savedItem.type || "").toLowerCase();
+  if (String(key || "").startsWith("augment_") || normalizedType === "augment") {
+    return isPublicAuction ? 2000 : 1500;
+  }
+  return Math.max(1, Math.floor(Number(
+    savedItem && (savedItem.auctionPrice || savedItem.price) || requestedPrice
+  ) || 1));
+}
+
+function ensurePublicAuctions() {
+  state.publicAuctions = Array.isArray(state.publicAuctions) ? state.publicAuctions : [];
+  return state.publicAuctions;
+}
+
+function publicAuctionView(auction) {
+  return {
+    auctionId: auction.auctionId,
+    key: auction.key,
+    qty: auction.qty || 1,
+    name: auction.name || auction.key,
+    sprite: auction.sprite || "",
+    color: auction.color || null,
+    type: auction.type || "",
+    price: Number(auction.price) || 0,
+    startingBid: Number(auction.startingBid) || Number(auction.price) || 0,
+    maxPrice: Number(auction.maxPrice) || 0,
+    nextBid: Math.min(Number(auction.maxPrice) || Infinity, (Number(auction.price) || 0) + PUBLIC_AUCTION_BID_STEP),
+    seller: auction.seller || "Player",
+    sellerPlayerId: auction.sellerPlayerId,
+    sellerGuildId: auction.sellerGuildId,
+    sellerGuildName: auction.sellerGuildName,
+    topBidder: auction.topBidder || null,
+    topBidderPlayerId: auction.topBidderPlayerId || null,
+    bids: auction.bids || [],
+    status: auction.status || "open",
+    createdAt: auction.createdAt,
+    endsAt: auction.endsAt,
+  };
+}
+
+function settlePublicAuction(auction, reason = "expired") {
+  if (!auction || auction.status !== "open") return false;
+  auction.status = auction.topBidderPlayerId ? "sold" : "expired";
+  auction.closedAt = new Date().toISOString();
+  auction.closeReason = reason;
+
+  const seller = auction.sellerPlayerId && state.players[auction.sellerPlayerId];
+  const buyer = auction.topBidderPlayerId && state.players[auction.topBidderPlayerId];
+  const amount = Number(auction.price) || 0;
+  if (buyer) {
+    grantPlayerItem(buyer, auction, auction.qty || 1);
+  } else if (auction.sellerGuildId && state.guilds[auction.sellerGuildId]) {
+    addItemToGuildVault(state.guilds[auction.sellerGuildId], auction, auction.qty || 1);
+  }
+  if (seller && buyer) {
+    seller.gold = (Number(seller.gold) || 0) + amount;
+  }
+  return true;
+}
+
+function settleExpiredPublicAuctions() {
+  const now = Date.now();
+  let changed = false;
+  for (const auction of ensurePublicAuctions()) {
+    if ((auction.status || "open") !== "open") continue;
+    if (Date.parse(auction.endsAt || "") <= now) {
+      changed = settlePublicAuction(auction, "expired") || changed;
+    }
+  }
+  return changed;
 }
 
 function getMemberRank(guild, playerId) {
@@ -1717,6 +2061,7 @@ app.delete("/v1/account/profiles/:profileSlot", requirePlayer, (req, res) => {
 app.patch("/v1/player/me", requirePlayer, (req, res) => {
   const p = req.player;
   const body = req.body || {};
+  delete body.rival;
   if (body.renameProfile === true) {
     const requestedName = String(body.name || body.displayName || p.displayName || "Player").trim().slice(0, 24) || p.displayName || "Player";
     if (normalizeHandle(requestedName) !== normalizeHandle(p.displayName || "") && isDisplayNameTaken(requestedName, p.playerId)) {
@@ -1970,12 +2315,14 @@ app.post("/v1/guilds", requirePlayer, (req, res) => {
     maxMembers: Number(req.body.maxMembers) || 20,
     isPublic: req.body.isPublic !== false,
     level: 1,
+    rep: 0,
     members: [req.player.playerId],
     desc: String(req.body.desc || "").trim().slice(0, 240),
     vault: {},
     vaultItems: {},
     contributions: {},
     auctions: [],
+    league: { slots: [], history: [] },
     createdAt: new Date().toISOString(),
   };
   state.guilds[guildId] = guild;
@@ -2142,8 +2489,8 @@ app.post("/v1/guilds/:guildId/wars", requirePlayer, (req, res) => {
   const createdAt = new Date().toISOString();
   const readyAt = new Date(Date.now() + GUILD_WAR_PREP_MS).toISOString();
   const warId = `war_${attacker.guildId}_${defender.guildId}_${Date.now().toString(36)}`;
-  const attackers = pickGuildWarTeam(attacker, "player", `${warId}:attackers`);
-  const defenders = pickGuildWarTeam(defender, "enemy", `${warId}:defenders`);
+  const rounds = buildGuildWarRounds(attacker, defender);
+  const firstRound = rounds[0] || { attackers: [], defenders: [] };
   const war = {
     warId,
     createdAt,
@@ -2153,8 +2500,9 @@ app.post("/v1/guilds/:guildId/wars", requirePlayer, (req, res) => {
     attackerGuildName: attacker.name,
     defenderGuildId: defender.guildId,
     defenderGuildName: defender.name,
-    attackers,
-    defenders,
+    rounds,
+    attackers: firstRound.attackers,
+    defenders: firstRound.defenders,
   };
 
   ensureGuildWars(attacker).push(war);
@@ -2231,6 +2579,7 @@ app.post("/v1/guilds/:guildId/loot/report", requirePlayer, (req, res) => {
   const won = req.body && req.body.won === true;
   if (won) {
     const reward = rollGuildLootReward(req.player, guild);
+    guild.rep = Math.max(0, (Number(guild.rep) || 0) - 2);
     saveState();
     return res.json({
       ok: true,
@@ -2243,6 +2592,7 @@ app.post("/v1/guilds/:guildId/loot/report", requirePlayer, (req, res) => {
   }
 
   const jailEntry = jailPlayerInGuild(guild, req.player);
+  guild.rep = (Number(guild.rep) || 0) + 5;
   addAuditLog({
     player: req.player,
     action: "guild_loot_failed_jail",
@@ -2261,6 +2611,115 @@ app.post("/v1/guilds/:guildId/loot/report", requirePlayer, (req, res) => {
     jail: publicGuildJail(guild),
     player: fullPlayer(req.player),
   });
+});
+
+app.post("/v1/guilds/:guildId/league/win", requirePlayer, (req, res) => {
+  const guild = state.guilds[req.params.guildId];
+  if (!guild) return res.status(404).json({ ok: false, error: "guild_not_found" });
+  if (!isGuildMember(guild, req.player.playerId)) return res.status(403).json({ ok: false, error: "not_guild_member" });
+  const lockedUntil = Number(req.player.guildLeagueLockedUntil) || 0;
+  if (lockedUntil > Math.floor(Date.now() / 1000)) {
+    return res.status(409).json({ ok: false, error: "league_locked", lockedUntil });
+  }
+  guild.gold = (Number(guild.gold) || 0) + 2000;
+  guild.rep = (Number(guild.rep) || 0) + 5;
+  saveState();
+  res.json({
+    ok: true,
+    guild: publicGuild(guild),
+    reward: { gold: 2000, rep: 5 },
+    player: fullPlayer(req.player),
+  });
+});
+
+app.post("/v1/guilds/:guildId/league/loss", requirePlayer, (req, res) => {
+  const guild = state.guilds[req.params.guildId];
+  if (!guild) return res.status(404).json({ ok: false, error: "guild_not_found" });
+  if (!isGuildMember(guild, req.player.playerId)) return res.status(403).json({ ok: false, error: "not_guild_member" });
+  const lockedUntil = Math.floor(Date.now() / 1000) + 12 * 60 * 60;
+  req.player.guildLeagueLockedUntil = lockedUntil;
+  saveState();
+  res.json({
+    ok: true,
+    lockedUntil,
+    player: fullPlayer(req.player),
+  });
+});
+
+app.post("/v1/guilds/:guildId/league/slots/:slot/claim", requirePlayer, (req, res) => {
+  const guild = state.guilds[req.params.guildId];
+  if (!guild) return res.status(404).json({ ok: false, error: "guild_not_found" });
+  if (!isGuildMember(guild, req.player.playerId)) return res.status(403).json({ ok: false, error: "not_guild_member" });
+  const slotIndex = Number(req.params.slot) - 1;
+  if (!Number.isInteger(slotIndex) || slotIndex < 0 || slotIndex >= 5) return res.status(400).json({ ok: false, error: "invalid_slot" });
+  if (slotIndex + 1 === GUILD_LEAGUE_LEADER_SLOT) return res.status(409).json({ ok: false, error: "leader_slot_locked" });
+  if (guild.leaderPlayerId === req.player.playerId) return res.status(409).json({ ok: false, error: "leader_already_on_team" });
+
+  const league = ensureGuildLeague(guild);
+  if (league.slots.some((slot) => slot && slot.playerId === req.player.playerId)) {
+    return res.status(409).json({ ok: false, error: "already_on_league_team", guild: publicGuild(guild) });
+  }
+  const existing = league.slots[slotIndex];
+  if (existing && existing.playerId && existing.playerId !== req.player.playerId) {
+    return res.status(409).json({ ok: false, error: "slot_taken", guild: publicGuild(guild) });
+  }
+
+  league.slots[slotIndex] = {
+    playerId: req.player.playerId,
+    joinedAt: new Date().toISOString(),
+  };
+  addGuildLeagueHistory(
+    guild,
+    "LEAGUE SLOT",
+    `${notificationPlayerName(req.player)} claimed league slot ${slotIndex + 1}.`,
+    "slot"
+  );
+  saveState();
+  res.json({ ok: true, guild: publicGuild(guild), player: fullPlayer(req.player) });
+});
+
+app.post("/v1/guilds/:guildId/league/slots/:slot/challenge", requirePlayer, (req, res) => {
+  const guild = state.guilds[req.params.guildId];
+  if (!guild) return res.status(404).json({ ok: false, error: "guild_not_found" });
+  if (!isGuildMember(guild, req.player.playerId)) return res.status(403).json({ ok: false, error: "not_guild_member" });
+  const slotIndex = Number(req.params.slot) - 1;
+  if (!Number.isInteger(slotIndex) || slotIndex < 0 || slotIndex >= 5) return res.status(400).json({ ok: false, error: "invalid_slot" });
+  if (slotIndex + 1 === GUILD_LEAGUE_LEADER_SLOT) return res.status(409).json({ ok: false, error: "leader_slot_locked" });
+  if (guild.leaderPlayerId === req.player.playerId) return res.status(409).json({ ok: false, error: "leader_already_on_team" });
+
+  const league = ensureGuildLeague(guild);
+  const existing = league.slots[slotIndex];
+  if (!existing || !existing.playerId) return res.status(404).json({ ok: false, error: "empty_slot" });
+  if (existing.playerId === req.player.playerId) return res.status(409).json({ ok: false, error: "already_holder" });
+
+  const defender = state.players[existing.playerId];
+  const won = req.body && req.body.won === true;
+  if (won) {
+    for (let index = 0; index < league.slots.length; index += 1) {
+      if (index !== slotIndex && league.slots[index] && league.slots[index].playerId === req.player.playerId) {
+        league.slots[index] = null;
+      }
+    }
+    league.slots[slotIndex] = {
+      playerId: req.player.playerId,
+      joinedAt: new Date().toISOString(),
+    };
+    addGuildLeagueHistory(
+      guild,
+      "LEAGUE CHALLENGE",
+      `${notificationPlayerName(req.player)} took slot ${slotIndex + 1} from ${defender ? notificationPlayerName(defender) : "a member"}.`,
+      "challenge"
+    );
+  } else {
+    addGuildLeagueHistory(
+      guild,
+      "LEAGUE DEFENSE",
+      `${defender ? notificationPlayerName(defender) : "A member"} defended league slot ${slotIndex + 1}.`,
+      "challenge"
+    );
+  }
+  saveState();
+  res.json({ ok: true, won, guild: publicGuild(guild), player: fullPlayer(req.player) });
 });
 
 app.get("/v1/guilds/:guildId/jail", requirePlayer, (req, res) => {
@@ -2422,7 +2881,8 @@ app.post("/v1/guilds/:guildId/auctions", requirePlayer, (req, res) => {
   const key = String(body.key || body.itemId || "").trim().slice(0, 80);
   if (!key) return res.status(400).json({ ok: false, error: "item_key_required" });
 
-  const qty = Math.max(1, Math.min(99, Math.floor(Number(body.qty || 1))));
+  const isPublicAuction = body.publicAuction === true || body.scope === "public";
+  const qty = 1;
   const before = { guildVaultQty: ensureGuildEconomy(guild).vault[key] || 0 };
   if (!decrementGuildVault(guild, key, qty)) {
     return res.status(409).json({ ok: false, error: "not_enough_vault_items" });
@@ -2430,9 +2890,57 @@ app.post("/v1/guilds/:guildId/auctions", requirePlayer, (req, res) => {
 
   ensureGuildEconomy(guild);
   const savedItem = guild.vaultItems[key] || {};
-  const requestedPrice = Math.max(1, Math.floor(Number(body.price || body.startingBid || 1)));
-  const auctionFloor = Math.max(1, Math.floor(Number(body.auctionPrice || body.minPrice || body.floorPrice || savedItem.auctionPrice || 1)));
-  const auctionPrice = Math.max(requestedPrice, auctionFloor);
+  const auctionFloor = fixedAuctionPrice(
+    key,
+    body.type,
+    isPublicAuction,
+    savedItem,
+    body.price || body.startingBid || body.auctionPrice
+  );
+  const auctionPrice = auctionFloor;
+  if (isPublicAuction) {
+    const publicAuction = {
+      auctionId: `public_auction_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+      key,
+      qty,
+      name: String(body.name || savedItem.name || key).slice(0, 80),
+      sprite: String(body.sprite || savedItem.sprite || "").slice(0, 180),
+      color: body.color || savedItem.color || null,
+      type: String(body.type || savedItem.type || "").slice(0, 40),
+      price: auctionPrice,
+      startingBid: auctionPrice,
+      auctionPrice: auctionFloor,
+      maxPrice: Math.max(auctionPrice, auctionFloor * 10),
+      seller: req.player.displayName || "Player",
+      sellerPlayerId: req.player.playerId,
+      sellerGuildId: guild.guildId,
+      sellerGuildName: guild.name,
+      topBidder: null,
+      topBidderPlayerId: null,
+      bids: [],
+      status: "open",
+      createdAt: new Date().toISOString(),
+      endsAt: new Date(Date.now() + PUBLIC_AUCTION_DURATION_MS).toISOString(),
+    };
+    ensurePublicAuctions().push(publicAuction);
+    addAuditLog({
+      player: req.player,
+      action: "public_auction_create",
+      before,
+      after: { guildVaultQty: ensureGuildEconomy(guild).vault[key] || 0, auction: publicAuction },
+      reason: "Leader moved vault item into public auction",
+      source: "public_auction",
+      meta: { guildId: guild.guildId, guildName: guild.name, key, qty, auctionId: publicAuction.auctionId },
+    });
+    saveState();
+    return res.json({
+      ok: true,
+      auction: publicAuctionView(publicAuction),
+      economy: publicGuildEconomy(guild),
+      publicAuctions: ensurePublicAuctions().filter((entry) => (entry.status || "open") === "open").map(publicAuctionView),
+    });
+  }
+
   const auction = {
     auctionId: `auction_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
     key,
@@ -2474,7 +2982,8 @@ app.post("/v1/guilds/:guildId/auctions/:auctionId/bid", requirePlayer, (req, res
   if (!auction || auction.status !== "open") return res.status(404).json({ ok: false, error: "auction_not_found" });
 
   const amount = Math.max(1, Math.floor(Number(req.body && (req.body.amount || req.body.bid) || 0)));
-  if (amount <= (auction.price || 0)) return res.status(400).json({ ok: false, error: "bid_too_low" });
+  const minimumBid = (Number(auction.price) || 0) + GUILD_AUCTION_BID_STEP;
+  if (amount < minimumBid) return res.status(400).json({ ok: false, error: "bid_too_low", minimumBid });
   if ((req.player.gold || 0) < amount) return res.status(409).json({ ok: false, error: "not_enough_gold" });
   if (auction.sellerPlayerId === req.player.playerId) return res.status(409).json({ ok: false, error: "cannot_buy_own_auction" });
 
@@ -2523,10 +3032,89 @@ app.post("/v1/guilds/:guildId/auctions/:auctionId/bid", requirePlayer, (req, res
   res.json({ ok: true, auction, auctions: guild.auctions, economy: publicGuildEconomy(guild), player: fullPlayer(req.player) });
 });
 
+app.get("/v1/auctions/public", requirePlayer, (req, res) => {
+  res.set("Cache-Control", "no-store");
+  const changed = settleExpiredPublicAuctions();
+  const page = Math.max(1, Math.floor(Number(req.query.page || 1)));
+  const pageSize = Math.max(1, Math.min(24, Math.floor(Number(req.query.pageSize || 12))));
+  const open = ensurePublicAuctions()
+    .filter((auction) => (auction.status || "open") === "open")
+    .sort((a, b) => Date.parse(a.endsAt || "") - Date.parse(b.endsAt || ""));
+  const totalPages = Math.max(1, Math.ceil(open.length / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const start = (safePage - 1) * pageSize;
+  if (changed) saveState();
+  res.json({
+    ok: true,
+    page: safePage,
+    pageSize,
+    total: open.length,
+    totalPages,
+    auctions: open.slice(start, start + pageSize).map(publicAuctionView),
+    player: fullPlayer(req.player),
+  });
+});
+
+app.post("/v1/auctions/public/:auctionId/bid", requirePlayer, (req, res) => {
+  settleExpiredPublicAuctions();
+  const auction = ensurePublicAuctions().find((entry) => entry.auctionId === req.params.auctionId);
+  if (!auction || (auction.status || "open") !== "open") return res.status(404).json({ ok: false, error: "auction_not_found" });
+  if (auction.sellerPlayerId === req.player.playerId) return res.status(409).json({ ok: false, error: "cannot_bid_own_auction" });
+  if (auction.topBidderPlayerId === req.player.playerId) return res.status(409).json({ ok: false, error: "already_top_bidder" });
+
+  const currentPrice = Number(auction.price) || 0;
+  const maxPrice = Math.max(currentPrice, Number(auction.maxPrice) || currentPrice);
+  const nextBid = Math.min(maxPrice, currentPrice + PUBLIC_AUCTION_BID_STEP);
+  if ((Number(req.player.gold) || 0) < nextBid) return res.status(409).json({ ok: false, error: "not_enough_gold", nextBid });
+
+  const previousBidder = auction.topBidderPlayerId && state.players[auction.topBidderPlayerId];
+  const previousAmount = Number(auction.price) || 0;
+  if (previousBidder && previousAmount > 0) {
+    previousBidder.gold = (Number(previousBidder.gold) || 0) + previousAmount;
+  }
+
+  req.player.gold = (Number(req.player.gold) || 0) - nextBid;
+  auction.price = nextBid;
+  auction.topBidderPlayerId = req.player.playerId;
+  auction.topBidder = req.player.displayName || "Player";
+  auction.bids = Array.isArray(auction.bids) ? auction.bids : [];
+  auction.bids.push({
+    playerId: req.player.playerId,
+    name: req.player.displayName || "Player",
+    amount: nextBid,
+    createdAt: new Date().toISOString(),
+  });
+
+  const remaining = Date.parse(auction.endsAt || "") - Date.now();
+  if (remaining <= PUBLIC_AUCTION_ANTI_SNIPE_MS) {
+    auction.endsAt = new Date(Date.now() + PUBLIC_AUCTION_ANTI_SNIPE_MS).toISOString();
+  }
+  if (nextBid >= maxPrice) {
+    settlePublicAuction(auction, "max_price");
+  }
+
+  addAuditLog({
+    player: req.player,
+    action: "public_auction_bid",
+    before: { bidderGold: (Number(req.player.gold) || 0) + nextBid, price: currentPrice },
+    after: { bidderGold: Number(req.player.gold) || 0, price: auction.price, status: auction.status || "open" },
+    reason: "Public auction bid",
+    source: "public_auction",
+    meta: { auctionId: auction.auctionId, key: auction.key, amount: nextBid },
+  });
+  saveState();
+  res.json({
+    ok: true,
+    auction: publicAuctionView(auction),
+    auctions: ensurePublicAuctions().filter((entry) => (entry.status || "open") === "open").map(publicAuctionView),
+    player: fullPlayer(req.player),
+  });
+});
+
 app.get("/v1/guilds/:guildId", requirePlayer, (req, res) => {
   const guild = state.guilds[req.params.guildId];
   if (!guild) return res.status(404).json({ ok: false, error: "guild_not_found" });
-  if (materializeReadyGuildWars()) saveState();
+  if (materializeReadyGuildWars() || materializeGuildLeagueTournament()) saveState();
   res.json({
     ok: true,
     guild: publicGuild(guild),
@@ -2719,6 +3307,29 @@ app.post("/v1/squad/recruit", requirePlayer, (req, res) => {
     : String(target.name || body.name || "Bot").trim();
   if (!name) return res.status(400).json({ ok: false, error: "missing_target" });
 
+  let priorOwner = null;
+  if (targetPlayerId) {
+    priorOwner = activeSquadOwnerForPlayer(targetPlayerId);
+    if (priorOwner && priorOwner.owner.playerId !== req.player.playerId) {
+      const defeatedRivalPlayerId = String(body.defeatedRivalPlayerId || "").trim();
+      if (defeatedRivalPlayerId !== priorOwner.owner.playerId) {
+        return res.status(409).json({
+          ok: false,
+          error: "target_conquered",
+          rival: fullPlayer(priorOwner.owner),
+          target: fullPlayer(realTarget),
+        });
+      }
+      removeSquadMemberByRef(priorOwner.squad, priorOwner.member);
+      pushNotification(priorOwner.owner.playerId, {
+        type: "squad_rebel",
+        text: `${name} was taken from your squad by ${notificationPlayerName(req.player)}`,
+        fromPlayerId: req.player.playerId,
+        fromName: notificationPlayerName(req.player),
+      });
+    }
+  }
+
   if (squad.conquered.some((member) => memberKey(member) === (targetPlayerId || name) || member.name === name)) {
     return res.json({ ok: true, squad, player: fullPlayer(req.player), alreadyRecruited: true });
   }
@@ -2738,11 +3349,20 @@ app.post("/v1/squad/recruit", requirePlayer, (req, res) => {
   squad.conquered.push(member);
 
   if (targetPlayerId) {
+    realTarget.rival = {
+      playerId: req.player.playerId,
+      name: notificationPlayerName(req.player),
+      visualId: playerSkinId(req.player),
+      goldGiven: 0,
+      taxRate: member.taxRate,
+      conqueredAt: member.conqueredAt,
+    };
     pushNotification(targetPlayerId, {
       type: "conquered",
       text: `You were conquered by ${notificationPlayerName(req.player)}`,
       fromPlayerId: req.player.playerId,
       fromName: notificationPlayerName(req.player),
+      fromVisualId: playerSkinId(req.player),
     });
   }
 
@@ -2763,6 +3383,12 @@ app.post("/v1/squad/liberate", requirePlayer, (req, res) => {
   const member = findSquadMember(req.player, req.body || {});
   if (!member) return res.status(404).json({ ok: false, error: "member_not_found" });
   squad.conquered = squad.conquered.filter((item) => item !== member);
+  if (member.targetPlayerId && state.players[member.targetPlayerId]) {
+    const target = state.players[member.targetPlayerId];
+    if (target.rival && target.rival.playerId === req.player.playerId) {
+      delete target.rival;
+    }
+  }
   pushNotification(req.player.playerId, {
     type: "squad_rebel",
     text: `${member.name || "A squad member"} has rebelled and is no longer part of your squad`,
@@ -2771,6 +3397,35 @@ app.post("/v1/squad/liberate", requirePlayer, (req, res) => {
   });
   saveState();
   res.json({ ok: true, squad, player: fullPlayer(req.player) });
+});
+
+app.post("/v1/squad/rebel", requirePlayer, (req, res) => {
+  const won = (req.body && req.body.won) === true;
+  const active = activeSquadOwnerForPlayer(req.player.playerId);
+  if (!active) {
+    if (req.player.rival) delete req.player.rival;
+    saveState();
+    return res.json({ ok: true, freed: true, alreadyFree: true, player: fullPlayer(req.player) });
+  }
+
+  if (won) {
+    removeSquadMemberByRef(active.squad, active.member);
+    delete req.player.rival;
+    pushNotification(active.owner.playerId, {
+      type: "squad_rebel",
+      text: `${notificationPlayerName(req.player)} rebelled and broke free from your squad`,
+      fromPlayerId: req.player.playerId,
+      fromName: notificationPlayerName(req.player),
+    });
+  }
+
+  saveState();
+  res.json({
+    ok: true,
+    freed: won,
+    rival: fullPlayer(active.owner),
+    player: fullPlayer(req.player),
+  });
 });
 
 app.post("/v1/squad/fight-reward", requirePlayer, (req, res) => {
@@ -2786,10 +3441,12 @@ app.post("/v1/squad/fight-reward", requirePlayer, (req, res) => {
     };
     req.player.gold = Math.max(0, (Number(req.player.gold) || 0) - amount);
     activeJail.guild.gold = (Number(activeJail.guild.gold) || 0) + amount;
+    activeJail.entry.taxGold = (Number(activeJail.entry.taxGold) || 0) + amount;
     jailTax = {
       guildId: activeJail.guild.guildId,
       guildName: activeJail.guild.name,
       amount,
+      totalTaxGold: activeJail.entry.taxGold,
       releaseAt: activeJail.entry.releaseAt,
     };
     addAuditLog({
@@ -2815,6 +3472,15 @@ app.post("/v1/squad/fight-reward", requirePlayer, (req, res) => {
         if (amount <= 0) continue;
         owner.gold = (Number(owner.gold) || 0) + amount;
         member.contributionGold = (Number(member.contributionGold) || 0) + amount;
+        const currentRival = req.player.rival || {};
+        req.player.rival = {
+          playerId: owner.playerId,
+          name: notificationPlayerName(owner),
+          visualId: playerSkinId(owner),
+          goldGiven: (currentRival.playerId === owner.playerId ? Number(currentRival.goldGiven) || 0 : 0) + amount,
+          taxRate: clampTaxRate(member.taxRate),
+          conqueredAt: currentRival.playerId === owner.playerId ? currentRival.conqueredAt : member.conqueredAt,
+        };
         addAuditLog({
           player: req.player,
           action: "squad_tax_payout",
@@ -2845,6 +3511,10 @@ initializeState()
     app.listen(port, host, () => {
       console.log(`Server running at http://${host}:${port}`);
     });
+    const guildLeagueTimer = setInterval(() => {
+      if (materializeGuildLeagueTournament()) saveState();
+    }, 30 * 1000);
+    if (guildLeagueTimer.unref) guildLeagueTimer.unref();
   })
   .catch((error) => {
     console.error("Failed to initialize server state:", error);

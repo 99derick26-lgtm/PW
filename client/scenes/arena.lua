@@ -7,6 +7,7 @@ local saveUtil   = require("utils.save")
 local stats      = require("utils.stats")
 local xpUtil     = require("utils.xp")
 local enemyGen   = require("utils.enemy_generator")
+local energyUtil = require("utils.enemies")
 local combat     = require("utils.combat")
 local spells     = require("utils.spells")
 local api        = require("utils.api")
@@ -18,7 +19,6 @@ local radialMenu = require("utils.radial_menu")
 local levelUpPopup = require("utils.levelup_popup")
 local chestRewards = require("utils.chest_rewards")
 local notifications = require("utils.notifications")
-local items = require("utils.items")
 local battleContext = require("utils.battle_context")
 
 -------------------------------------------------
@@ -85,6 +85,7 @@ local topInfoGroup
 local rebuildArenaUI
 local arenaDifficulty = composer.getVariable("arenaDifficulty") or "casual"
 local difficultyPopup
+local showConqueredTargetPopup
 
 local function clearGuildBattleModes()
     composer.setVariable("guildWarBattle", nil)
@@ -125,6 +126,34 @@ local function addNavTouch(target, btn, onRelease)
         end
         return true
     end)
+end
+
+local function showArenaToast(msg, isError)
+    local sg = composer.getScene(composer.getSceneName("current"))
+    local parent = sg and sg.view or display.getCurrentStage()
+    local bg = display.newRoundedRect(parent, display.contentCenterX, display.actualContentHeight - 106, display.actualContentWidth - 40, 34, 8)
+    bg:setFillColor(isError and 0.58 or 0.05, isError and 0.08 or 0.28, isError and 0.08 or 0.12, 0.96)
+    bg.strokeWidth = 1.5
+    bg:setStrokeColor(isError and 0.95 or 0.20, isError and 0.25 or 0.85, isError and 0.25 or 0.45, 0.85)
+    local txt = display.newText({
+        parent=parent, text=msg,
+        x=display.contentCenterX, y=display.actualContentHeight - 106,
+        font=ui.FONT_BOLD, fontSize=12, align="center",
+    })
+    txt:setFillColor(1, 1, 1)
+    transition.to(bg, { delay=1500, time=250, alpha=0, onComplete=function() if bg.removeSelf then bg:removeSelf() end end })
+    transition.to(txt, { delay=1500, time=250, alpha=0, onComplete=function() if txt.removeSelf then txt:removeSelf() end end })
+end
+
+local function spendArenaEnergy()
+    local p = saveUtil.load()
+    if not energyUtil.spendEnergy(p) then
+        saveUtil.save(p)
+        showArenaToast("Not enough energy.", true)
+        return nil
+    end
+    saveUtil.save(p)
+    return p
 end
 
 -------------------------------------------------
@@ -500,6 +529,126 @@ local function buildServerOpponent(serverPlayer, localPlayer)
     return opp
 end
 
+local function makeConquestTarget(targetPlayer, fallback)
+    targetPlayer = targetPlayer or {}
+    fallback = fallback or targetPlayer
+    return {
+        playerId = targetPlayer.playerId or targetPlayer.serverPlayerId or fallback.serverPlayerId,
+        name     = targetPlayer.displayName or targetPlayer.name or fallback.name,
+        level    = targetPlayer.level or fallback.level,
+        power    = targetPlayer.basePower or fallback.basePower or ((fallback.attack or 0) + (fallback.defense or 0) + (fallback.speed or 0)),
+        visualId = targetPlayer.visualId or targetPlayer.skinId or fallback.visualId,
+        equipped = targetPlayer.equipped or fallback.equipped,
+        pets     = targetPlayer.pets or fallback.pets,
+    }
+end
+
+local function startConquestBattle(enemyBuild, targetPlayer, defeatedRivalPlayerId)
+    local p = spendArenaEnergy()
+    if not p then return end
+
+    battleContext.startArena({
+        id         = enemyBuild.id,
+        name       = enemyBuild.name,
+        serverPlayerId = enemyBuild.serverPlayerId,
+        visualId   = enemyBuild.visualId,
+        level      = enemyBuild.level,
+        attack     = enemyBuild.attack,
+        defense    = enemyBuild.defense,
+        speed      = enemyBuild.speed,
+        hp         = enemyBuild.hp,
+        difficulty = enemyBuild.difficulty,
+        bias       = enemyBuild.bias,
+        pets       = enemyBuild.pets or {},
+        equipped   = enemyBuild.equipped,
+        currentWeaponIndex = enemyBuild.currentWeaponIndex,
+        weaponUsesLeft = enemyBuild.weaponUsesLeft,
+        isConquest = true,
+        conquestTarget = makeConquestTarget(targetPlayer, enemyBuild),
+        conquestRivalPlayerId = defeatedRivalPlayerId,
+    })
+
+    composer.gotoScene("scenes.arena_battle", { effect="slideLeft", time=220 })
+end
+
+showConqueredTargetPopup = function(sg, targetPlayer, rival)
+    if not (sg and sg.insert and rival and rival.playerId) then return end
+    local overlay = display.newGroup()
+    sg:insert(overlay)
+
+    local dim = display.newRect(overlay, display.contentCenterX, display.contentCenterY, display.actualContentWidth, display.actualContentHeight)
+    dim:setFillColor(0, 0, 0, 0.78)
+    dim.isHitTestable = true
+
+    local panelW, panelH = display.actualContentWidth - 34, 250
+    local panel = display.newRoundedRect(overlay, display.contentCenterX, display.contentCenterY, panelW, panelH, 12)
+    panel:setFillColor(0.03, 0.07, 0.18, 0.98)
+    panel.strokeWidth = 2
+    panel:setStrokeColor(0.25, 0.75, 1.0, 0.75)
+
+    local portrait = display.newRoundedRect(overlay, display.contentCenterX, display.contentCenterY - 72, 58, 58, 8)
+    portrait:setFillColor(0.07, 0.14, 0.30, 0.95)
+    portrait.strokeWidth = 1.5
+    portrait:setStrokeColor(0.35, 0.75, 1.0, 0.72)
+    local skin = rival.visualId or rival.skinId or "street_brawler"
+    local okP, img = pcall(display.newImageRect, overlay, "assets/sprites/characters/"..skin.."/portrait.png", 54, 54)
+    if okP and img then
+        img.x, img.y = portrait.x, portrait.y
+    end
+
+    local rivalName = rival.displayName or rival.name or "Rival"
+    display.newText({
+        parent=overlay, text=rivalName,
+        x=display.contentCenterX, y=display.contentCenterY - 30,
+        font=ui.FONT_BOLD, fontSize=16, align="center",
+    }):setFillColor(1, 1, 1)
+    display.newText({
+        parent=overlay, text="LV."..tostring(rival.level or 1),
+        x=display.contentCenterX, y=display.contentCenterY - 12,
+        font=ui.FONT_BOLD, fontSize=10, align="center",
+    }):setFillColor(0.55, 0.80, 1.0)
+
+    display.newText({
+        parent=overlay,
+        text="This player is in "..rivalName.."'s squad.\nWould you like to fight them?",
+        x=display.contentCenterX, y=display.contentCenterY + 26,
+        width=panelW - 42,
+        font=ui.FONT_BOLD, fontSize=11, align="center",
+    }):setFillColor(0.78, 0.88, 1.0)
+
+    local function makeBtn(label, x, onTap)
+        local btn
+        local ok, imgBtn = pcall(display.newImageRect, overlay, "assets/sprites/ui/btn_nav.png", 126, 33)
+        if ok and imgBtn then
+            btn = imgBtn
+            btn.x, btn.y = x, display.contentCenterY + 88
+        else
+            btn = display.newRoundedRect(overlay, x, display.contentCenterY + 88, 126, 33, 7)
+            btn:setFillColor(0.04, 0.16, 0.40, 0.96)
+            btn.strokeWidth = 1.5
+            btn:setStrokeColor(0.25, 0.70, 1.0, 0.80)
+        end
+        display.newText({ parent=overlay, text=label, x=x, y=display.contentCenterY + 88, font=ui.FONT_BOLD, fontSize=13 }):setFillColor(1, 1, 1)
+        btn:addEventListener("tap", function()
+            if overlay.removeSelf then overlay:removeSelf() end
+            onTap()
+            return true
+        end)
+    end
+
+    makeBtn("NO", display.contentCenterX - 70, function() end)
+    makeBtn("YES", display.contentCenterX + 70, function()
+        api.pvp.prepare(rival.playerId, { mode="fight" }, function(response)
+            if response and response.ok and response.data and response.data.opponent then
+                local rivalBuild = buildServerOpponent(response.data.opponent, saveUtil.load())
+                startConquestBattle(rivalBuild, targetPlayer, rival.playerId)
+            else
+                showArenaToast("Could not reach rival.", true)
+            end
+        end)
+    end)
+end
+
 local function serverPlayerToArenaEntry(serverPlayer, localPlayer)
     local opp = buildServerOpponent(serverPlayer, localPlayer)
     if serverPlayer.bot and not hasAnyLoadoutData(opp) then
@@ -527,13 +676,6 @@ local function serverPlayerToArenaEntry(serverPlayer, localPlayer)
     opp.serverPlayerId = serverPlayer.playerId
     opp.isBot = serverPlayer.bot == true
     return opp
-end
-
-local function getPetTier(def)
-    local size = def.spriteSize or 24
-    if size <= 16 then return 1 end
-    if size <= 24 then return 2 end
-    return 3
 end
 
 local function normalizePetId(petRef)
@@ -631,6 +773,93 @@ end
 -------------------------------------------------
 -- PREVIEW
 -------------------------------------------------
+local function previewPetSize(def)
+    local base = tonumber(def and def.spriteSize) or 42
+    local tier = def and def.size or "medium"
+    local boost = 1.22
+    if tier == "small" then
+        boost = 0.96
+    elseif tier == "medium" then
+        boost = 1.34
+    elseif tier == "large" then
+        boost = 1.08
+    elseif tier == "massive" then
+        boost = 0.92
+    end
+    return math.max(30, math.floor(base * boost))
+end
+
+local function previewPetTierRank(def)
+    local tier = def and def.size or "medium"
+    if tier == "small" then return 1 end
+    if tier == "medium" then return 2 end
+    if tier == "large" then return 3 end
+    if tier == "massive" then return 4 end
+    return 2
+end
+
+local function previewPetGap(leftEntry, rightEntry)
+    local rank = math.max(previewPetTierRank(leftEntry.def), previewPetTierRank(rightEntry.def))
+    local largest = math.max(leftEntry.size, rightEntry.size)
+    return math.floor(math.max(8, math.min(34, 6 + rank * 7 + math.max(0, largest - 48) * 0.14)))
+end
+
+local function buildPreviewPetLayout(petRefs, baseY, heroX)
+    local entries = {}
+    for _, petRef in ipairs(petRefs or {}) do
+        if #entries >= 3 then break end
+        local petId = normalizePetId(petRef)
+        local def = petsDB[petId]
+        if def then
+            entries[#entries + 1] = {
+                petId = petId,
+                def = def,
+                size = previewPetSize(def),
+            }
+        end
+    end
+
+    if #entries == 0 then return entries end
+
+    local gaps = {}
+    local totalW = 0
+    for i, entry in ipairs(entries) do
+        totalW = totalW + entry.size
+        if i > 1 then
+            gaps[i - 1] = previewPetGap(entries[i - 1], entry)
+            totalW = totalW + gaps[i - 1]
+        end
+    end
+
+    local leftBound = display.screenOriginX + 34
+    local rightBound = math.min(heroX - 58, display.contentCenterX + 18)
+    local usableW = math.max(90, rightBound - leftBound)
+    if totalW > usableW then
+        local scale = usableW / totalW
+        totalW = 0
+        for i, entry in ipairs(entries) do
+            entry.size = math.max(28, math.floor(entry.size * scale))
+            totalW = totalW + entry.size
+            if i > 1 then
+                gaps[i - 1] = math.max(7, math.floor((gaps[i - 1] or 10) * scale))
+                totalW = totalW + gaps[i - 1]
+            end
+        end
+    end
+
+    local x = leftBound + (usableW - totalW) * 0.5
+    local groundY = baseY + 82
+    for i, entry in ipairs(entries) do
+        x = x + entry.size * 0.5
+        entry.x = math.floor(x + 0.5)
+        entry.y = math.floor(groundY - entry.size * 0.5 + 0.5)
+        entry.groundY = groundY
+        x = x + entry.size * 0.5 + (gaps[i] or 0)
+    end
+
+    return entries
+end
+
 local function updatePreview(sceneGroup, player)
     if previewGroup then previewGroup:removeSelf(); previewGroup = nil end
     if topInfoGroup then topInfoGroup:removeSelf(); topInfoGroup = nil end
@@ -640,196 +869,112 @@ local function updatePreview(sceneGroup, player)
     sceneGroup:insert(previewGroup)
 
     local enemyBuild      = ensureGeneratedBuild(player, selectedOpponent)
-    local enemyPetIds     = enemyBuild.pets or {}
-    local previewEntities = {}
-
-    table.insert(previewEntities, {
-        type = "character", tier = 2, slot = 1,
-        path = "assets/sprites/characters/" .. selectedOpponent.visualId .. "/battle.png",
-        w = 96, h = 160
-    })
-
-    for i, petRef in ipairs(enemyPetIds) do
-        local petId = normalizePetId(petRef)
-        local def = petsDB[petId]
-        if def then
-            table.insert(previewEntities, {
-                type = "pet",
-                tier = getPetTier(def),
-                slot = i + 1,
-                path = petAssets.home(petId),
-                w    = def.spriteSize,
-                h    = def.spriteSize
-            })
-        end
-    end
-
-    table.sort(previewEntities, function(a, b)
-        if a.tier ~= b.tier then return a.tier > b.tier end
-        if a.type ~= b.type then return a.type == "pet" end
-        return a.slot < b.slot
-    end)
-
-    local characterX = display.contentCenterX + 120
-    local baseY      = 135
-    local spacing    = 40
-
-    for i, e in ipairs(previewEntities) do
-        local sprite = display.newImageRect(previewGroup, e.path, e.w, e.h)
-        if not sprite then
-            sprite = display.newRoundedRect(previewGroup, 0, 0, e.w, e.h, 6)
-            sprite:setFillColor(0.06, 0.14, 0.28, 0.94)
-            sprite.strokeWidth = 1
-            sprite:setStrokeColor(0.20, 0.64, 1.0, 0.8)
-        end
-        sprite.x = characterX - ((#previewEntities - i) * spacing)
-        sprite.y = baseY + (e.tier * 6)
-    end
-
-    local function compactList(values, fallback)
-        if type(values) ~= "table" or #values == 0 then return fallback end
-        local out = {}
-        for i = 1, math.min(3, #values) do
-            out[#out + 1] = tostring(values[i])
-        end
-        if #values > 3 then
-            out[#out + 1] = "+" .. tostring(#values - 3)
-        end
-        return table.concat(out, ", ")
-    end
+    local enemyPetIds     = enemyBuild.pets or selectedOpponent.pets or {}
 
     topInfoGroup = display.newGroup()
     sceneGroup:insert(topInfoGroup)
 
-    display.newText({
-        parent = topInfoGroup, text = "Lv." .. (enemyBuild.level or 1),
-        x = display.contentCenterX - 150, y = -10,
-        font = ui.FONT_BOLD, fontSize = 16, align = "left"
-    })
+    local winText = selectedOpponent.isBot
+        and fakeBotWinRate(selectedOpponent)
+        or saveUtil.getArenaWinRate(selectedOpponent, selectedOpponent.winRate)
 
-    display.newText({
+    local nameText = display.newText({
         parent = topInfoGroup, text = selectedOpponent.name,
-        x = display.contentCenterX, y = -10,
-        font = ui.FONT_BOLD, fontSize = 16, align = "left"
+        x = display.contentCenterX - 155, y = 46,
+        width = 230,
+        font = ui.FONT_BOLD, fontSize = 18, align = "left"
     })
+    nameText.anchorX = 0
+    nameText:setFillColor(1, 1, 1)
+
+    local winIcon = display.newImageRect(
+        topInfoGroup,
+        "assets/sprites/ui/icons/win.png",
+        22, 22
+    )
+    if winIcon then
+        winIcon.x = display.contentCenterX + 102
+        winIcon.y = 46
+    end
+    local winLabel = display.newText({
+        parent = topInfoGroup,
+        text = tostring(winText),
+        x = display.contentCenterX + 120, y = 46,
+        font = ui.FONT_BOLD, fontSize = 11,
+        align = "left"
+    })
+    winLabel.anchorX = 0
+    winLabel:setFillColor(0.74, 0.96, 1.0)
 
     local statDefs = {
         { key="attack",  icon="atk" },
         { key="defense", icon="def" },
         { key="speed",   icon="spd" },
         { key="hp",      icon="hp"  },
-        { key="WIN",     icon="win" },
     }
-    local winText = selectedOpponent.isBot
-        and fakeBotWinRate(selectedOpponent)
-        or saveUtil.getArenaWinRate(selectedOpponent, selectedOpponent.winRate)
-
-    local statStartX = display.contentCenterX - 160
-    local statSpacing = 65
+    local statStartX = display.contentCenterX - 142
+    local statSpacing = 94
 
     for i, def in ipairs(statDefs) do
         local x = statStartX + (i - 1) * statSpacing
-
         local icon = display.newImageRect(
             topInfoGroup,
             "assets/sprites/ui/icons/" .. def.icon .. ".png",
-            32, 32
+            34, 34
         )
-        icon.x = x + 6
-        icon.y = 20
+        if icon then
+            icon.x = x
+            icon.y = 82
+            icon.alpha = 0.88
+        end
 
-        display.newText({
+        local valueText = display.newText({
             parent   = topInfoGroup,
-            text     = def.key == "WIN" and winText or tostring(enemyBuild[def.key] or 0),
-            x        = x + 32,
-            y        = 20,
+            text     = tostring(enemyBuild[def.key] or 0),
+            x        = x + 26,
+            y        = 82,
             font     = ui.FONT_BOLD,
-            fontSize = 8
+            fontSize = 10,
+            align    = "left"
         })
+        valueText.anchorX = 0
+        valueText:setFillColor(0.92, 0.98, 1.0)
+    end
+
+    local baseY = 206
+    local heroX = display.contentCenterX + 92
+    local enemyShadow = display.newRoundedRect(previewGroup, heroX, baseY + 74, 70, 13, 7)
+    enemyShadow:setFillColor(0, 0, 0, 0.32)
+    enemyShadow.isHitTestable = false
+
+    local sprite = display.newImageRect(
+        previewGroup,
+        "assets/sprites/characters/" .. (selectedOpponent.visualId or "street_brawler") .. "/battle.png",
+        108, 178
+    )
+    if sprite then
+        sprite.x = heroX
+        sprite.y = baseY
+    end
+
+    for _, slot in ipairs(buildPreviewPetLayout(enemyPetIds, baseY, heroX)) do
+        local petSize = slot.size
+        local shadow = display.newRoundedRect(previewGroup, slot.x, slot.groundY + 4, petSize * 0.76, 10, 5)
+        if shadow then
+            shadow:setFillColor(0, 0, 0, 0.28)
+            shadow.isHitTestable = false
+        end
+        local pet = display.newImageRect(previewGroup, petAssets.home(slot.petId), petSize, petSize)
+        if pet then
+            pet.x = slot.x
+            pet.y = slot.y
+        end
     end
 end
 
 -------------------------------------------------
 -- SCENE CREATE
 -------------------------------------------------
-local function updatePreviewEnhanced(sceneGroup, player)
-    updatePreview(sceneGroup, player)
-    if not topInfoGroup or not topInfoGroup.removeSelf or not selectedOpponent then return end
-    local enemyBuild = ensureGeneratedBuild(player, selectedOpponent)
-
-    local function compactList(values, fallback)
-        if type(values) ~= "table" or #values == 0 then return fallback end
-        local out = {}
-        for i = 1, math.min(3, #values) do
-            out[#out + 1] = tostring(values[i])
-        end
-        if #values > 3 then out[#out + 1] = "+" .. tostring(#values - 3) end
-        return table.concat(out, ", ")
-    end
-
-    local loadoutStartY = 44
-    local loadoutX = display.contentCenterX - 154
-    local lines = {
-        "PETS: " .. compactList(enemyBuild.pets, "none"),
-        "SKILLS: " .. compactList(enemyBuild.spells, "none"),
-    }
-    for i, textValue in ipairs(lines) do
-        local line = display.newText({
-            parent = topInfoGroup,
-            text = textValue,
-            x = loadoutX,
-            y = loadoutStartY + (i - 1) * 14,
-            width = 200,
-            font = ui.FONT_BOLD,
-            fontSize = 8,
-            align = "left"
-        })
-        line.anchorX = 0
-        line:setFillColor(0.64, 0.84, 1.0)
-    end
-
-    local weaponIds = (enemyBuild.equipped and enemyBuild.equipped.weapons) or {}
-    local weaponY = loadoutStartY + (#lines * 14) + 6
-    local iconX = loadoutX + 8
-    local weaponLabel = display.newText({
-        parent = topInfoGroup,
-        text = "WEAPONS:",
-        x = loadoutX,
-        y = weaponY,
-        font = ui.FONT_BOLD,
-        fontSize = 8,
-        align = "left"
-    })
-    weaponLabel.anchorX = 0
-    weaponLabel:setFillColor(0.64, 0.84, 1.0)
-
-    if #weaponIds == 0 then
-        local none = display.newText({
-            parent = topInfoGroup,
-            text = "none",
-            x = loadoutX + 52,
-            y = weaponY,
-            font = ui.FONT_BOLD,
-            fontSize = 8,
-            align = "left"
-        })
-        none.anchorX = 0
-        none:setFillColor(0.64, 0.84, 1.0)
-        return
-    end
-
-    for i = 1, math.min(4, #weaponIds) do
-        local wid = weaponIds[i]
-        local def = items[wid]
-        if def and def.icon then
-            local icon = display.newImageRect(topInfoGroup, def.icon, 16, 16)
-            if icon then
-                icon.x = iconX + 60 + ((i - 1) * 18)
-                icon.y = weaponY
-            end
-        end
-    end
-end
 
 function scene:create(event)
     local sceneGroup = self.view
@@ -854,18 +999,10 @@ function scene:create(event)
     bg.y = display.contentCenterY
     sceneGroup:insert(bg)
 
-    local focusPanel = display.newRect(
-        sceneGroup,
-        display.contentCenterX, 100,
-        display.actualContentWidth * 1.9, 260
-    )
-    focusPanel:setFillColor(0, 0, 0, 0.65)
-    focusPanel.isHitTestable = false
-
     updatePreview(sceneGroup, player)
 
     rebuildArenaUI = function(sg, pl, session)
-        updatePreviewEnhanced(sg, pl)
+        updatePreview(sg, pl)
 
         if sg._arenaGridGroup then
             sg._arenaGridGroup:removeSelf()
@@ -876,20 +1013,12 @@ function scene:create(event)
         sg:insert(wallGroup)
         sg._arenaGridGroup = wallGroup
 
-        local wallFrame = display.newImageRect(
-            wallGroup,
-            "assets/sprites/ui/hologram_frame.png",
-            display.actualContentWidth + 10, 230
-        )
-        wallFrame.x = display.contentCenterX
-        wallFrame.y = 420
-
         local wallSurface = display.newRect(
             wallGroup,
             display.contentCenterX, 420,
             display.actualContentWidth - 25, 190
         )
-        wallSurface:setFillColor(0, 0, 0, 0.55)
+        wallSurface:setFillColor(0, 0, 0, 0.76)
         wallSurface.isHitTestable = false
 
         local controlY      = 320
@@ -1049,7 +1178,7 @@ function scene:create(event)
                 portrait:addEventListener("tap", function()
                     if defeated then return true end
                     selectedOpponent = opp
-                    updatePreviewEnhanced(sg, saveUtil.load())
+                    updatePreview(sg, saveUtil.load())
                     return true
                 end)
             end
@@ -1090,6 +1219,7 @@ function scene:create(event)
             local p = saveUtil.load()
 
             local function goLocalFight()
+                if not spendArenaEnergy() then return end
                 local enemyBuild = ensureGeneratedBuild(p, selectedOpponent)
 
                 battleContext.startArena({
@@ -1113,6 +1243,7 @@ function scene:create(event)
             end
 
             if selectedOpponent.generatedBuild or selectedOpponent.serverPlayerId or selectedOpponent.isBot then
+                if not spendArenaEnergy() then return end
                 local enemyBuild = ensureGeneratedBuild(p, selectedOpponent)
                 battleContext.startArena(enemyBuild)
                 composer.gotoScene("scenes.arena_battle")
@@ -1121,6 +1252,7 @@ function scene:create(event)
 
             api.pvp.find({ difficulty=arenaDifficulty, targetLevel=(p.level or 1) + (DIFFICULTY_LEVEL_OFFSET[arenaDifficulty] or 0) }, function(response)
                 if response and response.ok and response.data and response.data.opponent then
+                    if not spendArenaEnergy() then return end
                     battleContext.startArena(buildServerOpponent(response.data.opponent, p))
                     composer.gotoScene("scenes.arena_battle")
                 else
@@ -1133,34 +1265,33 @@ function scene:create(event)
             if not selectedOpponent then return end
 
             local p = saveUtil.load()
+
+            if selectedOpponent.serverPlayerId and not selectedOpponent.isBot then
+                api.pvp.prepare(selectedOpponent.serverPlayerId, { mode="recruit" }, function(response)
+                    if response and response.ok and response.data and response.data.opponent then
+                        local targetPlayer = response.data.opponent
+                        local rival = targetPlayer.rival
+                        if rival and rival.playerId and rival.playerId ~= p.playerId then
+                            showConqueredTargetPopup(sg, targetPlayer, rival)
+                            return
+                        end
+                        local enemyBuild = buildServerOpponent(targetPlayer, p)
+                        startConquestBattle(enemyBuild, targetPlayer, nil)
+                    else
+                        showArenaToast("Could not prepare conquest.", true)
+                    end
+                end)
+                return
+            end
+
             local enemyBuild = ensureGeneratedBuild(p, selectedOpponent)
-
-            battleContext.startArena({
-                id         = enemyBuild.id,
-                name       = enemyBuild.name,
-                visualId   = enemyBuild.visualId,
-                level      = enemyBuild.level,
-                attack     = enemyBuild.attack,
-                defense    = enemyBuild.defense,
-                speed      = enemyBuild.speed,
-                hp         = enemyBuild.hp,
-                difficulty = enemyBuild.difficulty,
-                bias       = enemyBuild.bias,
-                pets       = enemyBuild.pets or {},
-                equipped   = enemyBuild.equipped,
-                currentWeaponIndex = enemyBuild.currentWeaponIndex,
-                weaponUsesLeft = enemyBuild.weaponUsesLeft,
-                isConquest = true,
-                conquestTarget = {
-                    name      = enemyBuild.name or selectedOpponent.name,
-                    level     = enemyBuild.level,
-                    power     = selectedOpponent.basePower or (enemyBuild.attack + enemyBuild.defense + enemyBuild.speed),
-                    visualId  = selectedOpponent.visualId,
-                    playerId   = selectedOpponent.serverPlayerId,
-                }
-            })
-
-            composer.gotoScene("scenes.arena_battle", { effect="slideLeft", time=220 })
+            startConquestBattle(enemyBuild, {
+                name      = enemyBuild.name or selectedOpponent.name,
+                level     = enemyBuild.level,
+                power     = selectedOpponent.basePower or (enemyBuild.attack + enemyBuild.defense + enemyBuild.speed),
+                visualId  = selectedOpponent.visualId,
+                playerId   = selectedOpponent.serverPlayerId,
+            }, nil)
         end)
 
         addNavTouch(buttons["FIGHT ALL"], buttons["FIGHT ALL"]._navBtn, function()
@@ -1174,6 +1305,22 @@ function scene:create(event)
             local playerStats = stats.calculate(p)
 
             topUpArenaOpponents(session, p)
+            local neededEnergy = 0
+            for i = 1, ARENA_OPPONENT_COUNT do
+                if session.opponents[i] then neededEnergy = neededEnergy + 1 end
+            end
+            energyUtil.calcEnergy(p)
+            if (p.energy or 0) < neededEnergy then
+                saveUtil.save(p)
+                showArenaToast("Need "..neededEnergy.." energy.", true)
+                return
+            end
+            for _ = 1, neededEnergy do
+                energyUtil.spendEnergy(p)
+            end
+            saveUtil.save(p)
+            playerStats = stats.calculate(p)
+
             for i = 1, ARENA_OPPONENT_COUNT do
                 local opp = session.opponents[i]
                 if not opp then break end

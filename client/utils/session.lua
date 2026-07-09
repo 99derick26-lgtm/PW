@@ -1,13 +1,10 @@
 local json = require("json")
+local serverConfig = require("utils.server_config")
 
 local M = {}
 
 local SESSION_FILENAME = "session.json"
-local DEFAULT_BASE_URL = "https://upbeat-intuition-production.up.railway.app"
-local OLD_BASE_URLS = {
-    ["http://192.168.1.250:3000"] = true,
-    ["http://192.168.1.77:3000"] = true,
-}
+local DEFAULT_BASE_URL = serverConfig.getBaseUrl()
 
 local state = {
     baseUrl = DEFAULT_BASE_URL,
@@ -39,7 +36,7 @@ local function isLoopbackUrl(url)
 end
 
 local function isStaleDefaultUrl(url)
-    return type(url) == "string" and OLD_BASE_URLS[url] == true
+    return serverConfig.isKnownServerUrl(url) and url ~= DEFAULT_BASE_URL
 end
 
 local function persist()

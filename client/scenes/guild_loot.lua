@@ -8,6 +8,7 @@ local ui        = require("utils.ui")
 local itemDefs  = require("utils.items")
 local guildNav  = require("utils.guild_nav")
 local guildContext = require("utils.guild_context")
+local shell     = require("utils.guild_scene_shell")
 
 local SW = display.contentWidth
 local SH = display.contentHeight
@@ -20,11 +21,6 @@ local HEADER_Y   = HEADER_H * 0.5
 local CONTENT_TOP = HEADER_H + 2
 local CONTENT_BOT = guildNav.contentBottom()
 local CONTENT_H   = CONTENT_BOT - CONTENT_TOP
-
-local FRAME_LARGE  = "assets/sprites/ui/frames/border_large.png"
-local FRAME_SMALL  = "assets/sprites/ui/frames/border_small.png"
-local FRAME_THIN_L = "assets/sprites/ui/frames/thin_large.png"
-local FRAME_THIN_S = "assets/sprites/ui/frames/thin_small.png"
 
 -------------------------------------------------
 -- RANKS
@@ -44,24 +40,29 @@ local function rankValue(r)
     return 99
 end
 
-local AUCTION_DEFAULT_PRICES = {
-    gem = 1500,
-    gems = 1500,
-    crystal_green = 2000,
-    crystal_blue = 2500,
-    crystal_orange = 3000,
-    crystal_purple = 3500,
+local AUCTION_PRICES = {
+    crystal_green = { guild=1500, public=2000 },
+    crystal_blue = { guild=2000, public=2500 },
+    crystal_orange = { guild=2500, public=3000 },
+    crystal_purple = { guild=3000, public=3500 },
 }
 
-local function getAuctionDefaultPrice(item)
+local function isAugment(item)
+    local key = string.lower(tostring(item and item.key or ""))
+    local itemType = string.lower(tostring(item and item.type or ""))
+    return string.sub(key, 1, 8) == "augment_" or itemType == "augment"
+end
+
+local function getAuctionPrice(item, scope)
     if not item then return 100 end
-    if item.auctionPrice and item.auctionPrice > 0 then
-        return item.auctionPrice
+    local known = AUCTION_PRICES[item.key]
+    if known then
+        return scope == "PUBLIC" and known.public or known.guild
     end
-    if item.price and item.price > 0 then
-        return item.price
+    if isAugment(item) then
+        return scope == "PUBLIC" and 2000 or 1500
     end
-    return AUCTION_DEFAULT_PRICES[item.key] or 100
+    return math.max(1, tonumber(item.auctionPrice) or tonumber(item.price) or 100)
 end
 
 local function isGuildLootableItem(def)
@@ -177,15 +178,6 @@ end
 local function tryImg(parent, path, w, h)
     local ok, img = pcall(display.newImageRect, parent, path, w, h)
     return (ok and img) or nil
-end
-
-local function drawFrame(parent, x, y, w, h, path)
-    local ok, img = pcall(display.newImageRect, parent, path, w, h)
-    if ok and img then img.x=x; img.y=y; return img end
-    local r = display.newRoundedRect(parent, x, y, w, h, 8)
-    r:setFillColor(0.03,0.08,0.20,0.95)
-    r.strokeWidth=1.5; r:setStrokeColor(0.18,0.65,0.42,0.70)
-    return r
 end
 
 local function getPlayerRank()
@@ -829,9 +821,6 @@ local function buildAuctionPostPopup(sg, onPosted, preselectedItem)
     local vaultItems = serverEconomy and serverEconomy.vaultItems or {}
     local postItems = {}
     if preselectedItem then
-        if not preselectedItem.price then
-            preselectedItem.price = getAuctionDefaultPrice(preselectedItem)
-        end
         table.insert(postItems, preselectedItem)
     else
         for _, def in ipairs(VAULT_DEFS) do
@@ -860,10 +849,15 @@ local function buildAuctionPostPopup(sg, onPosted, preselectedItem)
     end
 
     local selectedItem = preselectedItem
-    local selectedPrice = getAuctionDefaultPrice(preselectedItem)
-    local selectedFloor = selectedPrice
     local selectedMinRank = "MEMBER"
-    local selBg = nil
+    local selectedScope = "GUILD"
+    local selectedPrice = getAuctionPrice(preselectedItem, selectedScope)
+    local postPriceText
+    local rankGroup
+    local function refreshAuctionPrice()
+        selectedPrice = getAuctionPrice(selectedItem, selectedScope)
+        if postPriceText then postPriceText.text = tostring(selectedPrice) .. " GOLD" end
+    end
 
     -- item scroll
     local scrollH  = ph * 0.42
@@ -902,9 +896,7 @@ local function buildAuctionPostPopup(sg, onPosted, preselectedItem)
         local capItem=item; local capI=i
         card:addEventListener("tap", function()
             selectedItem = capItem
-            selectedPrice = getAuctionDefaultPrice(capItem)
-            selectedFloor = selectedPrice
-            priceTxt.text = tostring(selectedPrice)
+            refreshAuctionPrice()
             for j, bg in ipairs(itemBgs) do
                 if j==capI then
                     bg:setFillColor(0.05,0.22,0.10,0.97)
@@ -930,44 +922,72 @@ local function buildAuctionPostPopup(sg, onPosted, preselectedItem)
         return true
     end)
 
-    -- price input
-    local priceY = CY + ph*0.5 - 130
-    display.newText({ parent=popup, text="STARTING PRICE (gold)",
-        x=CX, y=priceY-20, font=ui.FONT_BOLD, fontSize=9, align="center"
-    }):setFillColor(0.50,0.65,0.85)
+    if preselectedItem and selectedItem then
+        container.isVisible = false
+        local spr = tryImg(popup, selectedItem.sprite, 120, 120)
+        if spr then
+            spr.x = CX
+            spr.y = CY - ph*0.5 + 150
+        end
+        display.newText({ parent=popup, text=selectedItem.name or "Item",
+            x=CX, y=CY - ph*0.5 + 222, width=pw-40,
+            font=ui.FONT_BOLD, fontSize=14, align="center" })
+            :setFillColor(unpack(selectedItem.color or {0.90,0.96,1.0}))
+        display.newText({ parent=popup, text="x1",
+            x=CX, y=CY - ph*0.5 + 242,
+            font=ui.FONT_BOLD, fontSize=9, align="center" })
+            :setFillColor(0.50,0.65,0.85)
+    end
 
-    local priceBg = display.newRoundedRect(popup, CX, priceY, 160, 32, 6)
-    priceBg:setFillColor(0.04,0.10,0.24,0.97)
-    priceBg.strokeWidth=1.5; priceBg:setStrokeColor(1.0,0.70,0.20,0.60)
-
-    local priceTxt = display.newText({ parent=popup, text=tostring(selectedPrice),
-        x=CX, y=priceY, font=ui.FONT_BOLD, fontSize=14, align="center"
-    })
-    priceTxt:setFillColor(1.0,0.82,0.20)
-
-    local minusB = display.newRoundedRect(popup, CX-100, priceY, 32, 32, 6)
-    minusB:setFillColor(0.04,0.10,0.24,0.97); minusB.strokeWidth=1
-    minusB:setStrokeColor(1.0,0.70,0.20,0.50)
-    display.newText({ parent=popup, text="-", x=CX-100, y=priceY-1,
-        font=ui.FONT_BOLD, fontSize=18 }):setFillColor(1.0,0.82,0.20)
-    minusB:addEventListener("tap", function()
-        selectedPrice = math.max(selectedFloor or 10, selectedPrice-50)
-        priceTxt.text = tostring(selectedPrice); return true
-    end)
-
-    local plusB = display.newRoundedRect(popup, CX+100, priceY, 32, 32, 6)
-    plusB:setFillColor(0.04,0.10,0.24,0.97); plusB.strokeWidth=1
-    plusB:setStrokeColor(1.0,0.70,0.20,0.50)
-    display.newText({ parent=popup, text="+", x=CX+100, y=priceY-1,
-        font=ui.FONT_BOLD, fontSize=18 }):setFillColor(1.0,0.82,0.20)
-    plusB:addEventListener("tap", function()
-        selectedPrice = selectedPrice+50
-        priceTxt.text = tostring(selectedPrice); return true
-    end)
+    -- auction scope selector
+    local scopeY = CY + ph*0.5 - 112
+    local scopeLabel = display.newText({ parent=popup, text="GUILD AUCTION",
+        x=CX, y=scopeY-18, width=pw-36, font=ui.FONT_BOLD, fontSize=7, align="center" })
+    scopeLabel:setFillColor(0.56,0.72,0.92)
+    local scopeButtons = {}
+    local function refreshScope()
+        for _, btn in ipairs(scopeButtons) do
+            local active = btn.scope == selectedScope
+            btn.box.alpha = active and 1.0 or 0.42
+            btn.text:setFillColor(active and 0.40 or 0.58, active and 1.0 or 0.72, active and 0.72 or 0.90)
+        end
+        if selectedScope == "PUBLIC" then
+            scopeLabel.text = "PUBLIC - 12H, +250 BIDS"
+        else
+            scopeLabel.text = "GUILD - FIRST BID +100"
+        end
+        if rankGroup then rankGroup.isVisible = selectedScope == "GUILD" end
+        refreshAuctionPrice()
+    end
+    local function scopeButton(label, scope, x)
+        local ok, box = pcall(display.newImageRect, popup, "assets/sprites/ui/btn_nav.png", 122, 28)
+        if not ok or not box then
+            box = display.newRoundedRect(popup, x, scopeY, 122, 28, 5)
+            box:setFillColor(0.02,0.08,0.20,0.98)
+        else
+            box.x = x
+            box.y = scopeY
+        end
+        local text = display.newText({ parent=popup, text=label, x=x, y=scopeY, font=ui.FONT_BOLD, fontSize=9 })
+        local function selectScope()
+            selectedScope = scope
+            refreshScope()
+            return true
+        end
+        local hit = display.newRect(popup, x, scopeY, 126, 32)
+        hit:setFillColor(1,1,1,0.01)
+        hit.isHitTestable = true
+        hit:addEventListener("tap", selectScope)
+        scopeButtons[#scopeButtons+1] = { box=box, text=text, scope=scope }
+    end
+    scopeButton("GUILD", "GUILD", CX - 68)
+    scopeButton("PUBLIC", "PUBLIC", CX + 68)
 
     -- min rank selector
-    local rankY = CY + ph*0.5 - 86
-    display.newText({ parent=popup, text="MIN RANK TO BID",
+    rankGroup = display.newGroup()
+    popup:insert(rankGroup)
+    local rankY = CY + ph*0.5 - 69
+    display.newText({ parent=rankGroup, text="MIN RANK TO BID",
         x=CX, y=rankY-18, font=ui.FONT_BOLD, fontSize=9, align="center"
     }):setFillColor(0.50,0.65,0.85)
 
@@ -978,13 +998,13 @@ local function buildAuctionPostPopup(sg, onPosted, preselectedItem)
         local rx = CX - pw*0.5+10 + (i-0.5)*rankBtnW
         local rc = RANK_COLORS[rk] or RANK_COLORS.MEMBER
         local isActive = (rk == selectedMinRank)
-        local rbg = display.newRoundedRect(popup, rx, rankY, rankBtnW-4, 22, 4)
+        local rbg = display.newRoundedRect(rankGroup, rx, rankY, rankBtnW-4, 22, 4)
         rbg:setFillColor(isActive and rc[1]*0.25 or 0.03,
                          isActive and rc[2]*0.25 or 0.06,
                          isActive and rc[3]*0.25 or 0.14, 0.97)
         rbg.strokeWidth=1.5
         rbg:setStrokeColor(rc[1], rc[2], rc[3], isActive and 0.90 or 0.35)
-        local rt = display.newText({ parent=popup, text=rk:sub(1,3),
+        local rt = display.newText({ parent=rankGroup, text=rk:sub(1,3),
             x=rx, y=rankY, font=ui.FONT_BOLD, fontSize=7, align="center" })
         rt:setFillColor(unpack(rc))
         rankBtns[i] = { bg=rbg, txt=rt, rank=rk, color=rc }
@@ -1002,16 +1022,27 @@ local function buildAuctionPostPopup(sg, onPosted, preselectedItem)
         end)
     end
 
-    -- POST button
-    local postY = CY + ph*0.5 - 26
-    local postBg = display.newRoundedRect(popup, CX, postY, 180, 36, 8)
-    postBg:setFillColor(0.05,0.22,0.08,0.97)
-    postBg.strokeWidth=2; postBg:setStrokeColor(0.22,0.88,0.35,0.85)
-    display.newText({ parent=popup, text="POST TO AUCTION",
-        x=CX, y=postY, font=ui.FONT_BOLD, fontSize=12
-    }):setFillColor(0.35,1.0,0.50)
-
-    postBg:addEventListener("tap", function()
+    -- The fixed starting price is also the post button.
+    local postY = CY + ph*0.5 - 25
+    local okPost, postBg = pcall(display.newImageRect, popup, "assets/sprites/ui/btn_nav.png", 180, 38)
+    if okPost and postBg then
+        postBg.x = CX
+        postBg.y = postY
+    else
+        postBg = display.newRoundedRect(popup, CX, postY, 180, 38, 8)
+        postBg:setFillColor(0.04,0.14,0.32,0.98)
+    end
+    postPriceText = display.newText({ parent=popup, text="",
+        x=CX, y=postY, font=ui.FONT_BOLD, fontSize=12 })
+    postPriceText:setFillColor(1.0,0.82,0.20)
+    local postStatus = display.newText({ parent=popup, text="",
+        x=CX, y=postY-23, width=pw-30, font=ui.FONT_BOLD, fontSize=7, align="center" })
+    postStatus:setFillColor(1.0,0.40,0.40)
+    local isPosting = false
+    local function postAuction()
+        if isPosting or not selectedItem then return true end
+        isPosting = true
+        postStatus.text = ""
         if not selectedItem then return true end
         local guildId = getCurrentGuildId()
         if guildId then
@@ -1019,12 +1050,18 @@ local function buildAuctionPostPopup(sg, onPosted, preselectedItem)
                 key=selectedItem.key, name=selectedItem.name,
                 sprite=selectedItem.sprite, color=selectedItem.color,
                 type=selectedItem.type, qty=1,
-                price=selectedPrice, auctionPrice=selectedFloor, minRank=selectedMinRank,
+                price=selectedPrice, auctionPrice=selectedPrice, minRank=selectedMinRank,
+                publicAuction=(selectedScope == "PUBLIC"),
             }, function(response)
                 if response.ok and response.data then
                     applyServerEconomy(response.data.economy)
                     closePopup()
                     if onPosted then onPosted() end
+                else
+                    isPosting = false
+                    postStatus.text = string.upper(tostring(
+                        response and response.data and response.data.error or response and response.error or "POST FAILED"
+                    ))
                 end
             end)
             return true
@@ -1035,7 +1072,7 @@ local function buildAuctionPostPopup(sg, onPosted, preselectedItem)
         table.insert(pp.guildAuction, {
             key=selectedItem.key, name=selectedItem.name,
             sprite=selectedItem.sprite, color=selectedItem.color,
-            price=selectedPrice, auctionPrice=selectedFloor, minRank=selectedMinRank,
+            price=selectedPrice, auctionPrice=selectedPrice, minRank=selectedMinRank,
             seller=pp.name or "Unknown", bids={},
         })
         pp.guildVault = pp.guildVault or {}
@@ -1044,7 +1081,12 @@ local function buildAuctionPostPopup(sg, onPosted, preselectedItem)
         closePopup()
         if onPosted then onPosted() end
         return true
-    end)
+    end
+    local postHit = display.newRect(popup, CX, postY, 190, 44)
+    postHit:setFillColor(1,1,1,0.01)
+    postHit.isHitTestable = true
+    postHit:addEventListener("tap", postAuction)
+    refreshScope()
 end
 
 -------------------------------------------------
@@ -1071,7 +1113,7 @@ local function buildAuctionBidPopup(sg, auctionItem, auctionIdx, onBid)
     }):setFillColor(unpack(auctionItem.color or {0.9,0.9,1.0}))
 
     display.newText({ parent=popup,
-        text="Seller: "..auctionItem.seller.."   ·   Min rank: "..auctionItem.minRank,
+        text="Seller: "..auctionItem.seller.."   -   Min rank: "..auctionItem.minRank,
         x=CX, y=CY-ph*0.5+116, font=ui.FONT_BOLD, fontSize=8, align="center"
     }):setFillColor(0.45,0.55,0.75)
 
@@ -1083,13 +1125,13 @@ local function buildAuctionBidPopup(sg, auctionItem, auctionIdx, onBid)
     end
 
     local bidInfoTxt = display.newText({ parent=popup,
-        text="Top bid: "..topBid.."g  ·  "..topBidder,
+        text="Top bid: "..topBid.."g  -  "..topBidder,
         x=CX, y=CY-ph*0.5+134, font=ui.FONT_BOLD, fontSize=10, align="center"
     })
     bidInfoTxt:setFillColor(1.0,0.82,0.20)
 
     -- bid amount
-    local bidAmount = topBid + 50
+    local bidAmount = topBid + 100
     local bidTxt = display.newText({ parent=popup, text=tostring(bidAmount).."g",
         x=CX, y=CY, font=ui.FONT_BOLD, fontSize=16, align="center"
     })
@@ -1101,7 +1143,7 @@ local function buildAuctionBidPopup(sg, auctionItem, auctionIdx, onBid)
     display.newText({ parent=popup, text="-", x=CX-80, y=CY-1,
         font=ui.FONT_BOLD, fontSize=18 }):setFillColor(1.0,0.82,0.20)
     mb:addEventListener("tap", function()
-        bidAmount = math.max(topBid+50, bidAmount-50)
+        bidAmount = math.max(topBid+100, bidAmount-100)
         bidTxt.text = tostring(bidAmount).."g"; return true
     end)
 
@@ -1111,7 +1153,7 @@ local function buildAuctionBidPopup(sg, auctionItem, auctionIdx, onBid)
     display.newText({ parent=popup, text="+", x=CX+80, y=CY-1,
         font=ui.FONT_BOLD, fontSize=18 }):setFillColor(1.0,0.82,0.20)
     pb2:addEventListener("tap", function()
-        bidAmount = bidAmount+50; bidTxt.text = tostring(bidAmount).."g"; return true
+        bidAmount = bidAmount+100; bidTxt.text = tostring(bidAmount).."g"; return true
     end)
 
     -- check rank
@@ -1200,10 +1242,13 @@ local function buildActionButtons(sg)
 
     for i, btn in ipairs(btnDefs) do
         local bx = 9 + (i-0.5)*btnW
-        drawFrame(actionGroup, bx, ACTION_BTN_Y, btnW-6, ACTION_BTN_H, FRAME_THIN_S)
+        local bg = display.newRoundedRect(actionGroup, bx, ACTION_BTN_Y, btnW-6, ACTION_BTN_H, 7)
+        bg:setFillColor(0.025,0.075,0.18,0.96)
+        bg.strokeWidth = 1.3
+        bg:setStrokeColor(0.22,0.66,1.0,0.58)
         local bt = display.newText({ parent=actionGroup, text=btn.label,
             x=bx, y=ACTION_BTN_Y, width=btnW-10, font=ui.FONT_BOLD, fontSize=8, align="center" })
-        bt:setFillColor(unpack(btn.color))
+        bt:setFillColor(0.72,0.92,1.0)
         local capAction = btn.action
         local hitBg = display.newRect(actionGroup, bx, ACTION_BTN_Y, btnW-6, ACTION_BTN_H)
         hitBg:setFillColor(0,0,0,0)
@@ -1480,7 +1525,7 @@ buildVaultDetail = function(sg, item, qty)
     }):setFillColor(unpack(item.color))
 
     display.newText({ parent=popup,
-        text=(item.type or "").."   ·   Guild Vault: "..qty,
+        text=(item.type or "").."   -   Guild Vault: "..qty,
         x=CX, y=CY-ph*0.5+124, font=ui.FONT_BOLD, fontSize=10, align="center"
     }):setFillColor(0.60,0.68,0.85)
 
@@ -1581,13 +1626,13 @@ buildLootTabs = function(sg)
     local LTAB_Y = CONTENT_TOP + 16
 
     local bg=display.newRoundedRect(sg, CX, LTAB_Y, LTAB_W, LTAB_H, 4)
-    bg:setFillColor(0.04, 0.18, 0.10, 0.97)
+    bg:setFillColor(0.035, 0.10, 0.24, 0.97)
     bg.strokeWidth=1.5
-    bg:setStrokeColor(0.18, 0.82, 0.42, 0.90)
+    bg:setStrokeColor(0.24, 0.72, 1.0, 0.80)
     tabBgs[1]=bg
     local bt=display.newText({ parent=sg, text="GUILD VAULT",
         x=CX, y=LTAB_Y, font=ui.FONT_BOLD, fontSize=10, align="center" })
-    bt:setFillColor(0.28, 1.0, 0.48)
+    bt:setFillColor(0.72, 0.92, 1.0)
     tabTxts[1]=bt
 end
 
@@ -1604,14 +1649,7 @@ function scene:create(event)
         ln:setFillColor(0.05,0.18,0.42,0.04); ln.isHitTestable=false
     end
 
-    drawFrame(sg, CX, HEADER_Y, SW-6, HEADER_H, FRAME_SMALL)
-    display.newRect(sg, CX, HEADER_H, SW, 2):setFillColor(0.15,0.55,0.35,0.55)
-    display.newText({ parent=sg, text="GUILD VAULT",
-        x=CX, y=HEADER_Y-14, font=ui.FONT_BOLD, fontSize=18, align="center"
-    }):setFillColor(0.25,0.95,0.58)
-    display.newText({ parent=sg, text="Vault  -  Donate  -  Auction",
-        x=CX, y=HEADER_Y+14, font=ui.FONT_BOLD, fontSize=9, align="center"
-    }):setFillColor(0.38,0.52,0.65)
+    shell.drawTitleBanner(sg, "GUILD VAULT", { y=36, height=54, color={0.40,0.84,1.0} })
 
     buildBottomBar(sg, 4)
     buildLootTabs(sg)

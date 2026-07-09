@@ -92,6 +92,7 @@ function M.addConquered(player, aiTarget)
         power     = aiTarget.power,
         visualId  = aiTarget.visualId,
         taxRate   = 0.10,             -- default 10%
+        contributionGold = 0,
         conqueredAt = os.time(),
     })
     return true
@@ -148,7 +149,9 @@ function M.tick(player)
             local c = player.squad.conquered[i]
 
             -- gold from this conquered player
-            goldGained = goldGained + math.floor(TAX_GOLD * c.taxRate * ticks)
+            local earned = math.floor(TAX_GOLD * c.taxRate * ticks)
+            goldGained = goldGained + earned
+            c.contributionGold = (c.contributionGold or 0) + earned
 
             -- liberation chance per tick
             local freed = false

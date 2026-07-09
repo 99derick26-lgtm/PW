@@ -37,7 +37,7 @@ local M = {}
 -- ENERGY CONFIG (matches home.lua)
 -------------------------------------------------
 local ENERGY_MAX      = 30
-local ENERGY_INTERVAL = 16 * 60   -- seconds per tick
+local ENERGY_INTERVAL = 10 * 60   -- seconds per tick, 6 energy per hour
 
 -------------------------------------------------
 -- DIFFICULTY LEVEL OFFSETS

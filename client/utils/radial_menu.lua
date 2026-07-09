@@ -482,11 +482,17 @@ local function buildMenu(sceneGroup, innerData, outerData, activeScene)
     bgPoly.strokeWidth = 0
 
     -- rings and dividers drawn on top of background
-  drawMidRing(menuGroup, originX, originY)
+    drawMidRing(menuGroup, originX, originY)
     drawArcLine(menuGroup, originX, originY, ARC_OUTER + 3, {0.2, 0.6, 1.0, 0.85}, 2)
     drawArcLine(menuGroup, originX, originY, ARC_INNER - 3, {0.2, 0.6, 1.0, 0.5},  1.5)
+
+    -- Outer ring has 5 groups. Inner ring has 4 groups, so its dividers
+    -- need their own angles instead of continuing the outer spokes downward.
     for i = 0, OUTER_SLOT_COUNT do
-        drawSpoke(menuGroup, originX, originY, i * OUTER_WEDGE, ARC_INNER, ARC_OUTER)
+        drawSpoke(menuGroup, originX, originY, i * OUTER_WEDGE, ARC_MID, ARC_OUTER)
+    end
+    for i = 1, INNER_SLOT_COUNT - 1 do
+        drawSpoke(menuGroup, originX, originY, i * INNER_WEDGE, ARC_INNER, ARC_MID)
     end
 
     local normalizedOuterData = {}

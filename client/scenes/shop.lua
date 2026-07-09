@@ -4,6 +4,7 @@ local scene     = composer.newScene()
 package.loaded["utils.items"] = nil  -- force reload for hot-testing
 
 local items      = require("utils.items")
+local api        = require("utils.api")
 local saveUtil   = require("utils.save")
 local sync       = require("utils.sync")
 local ui         = require("utils.ui")
@@ -23,12 +24,12 @@ local COLS    = 1
 local CARD_W  = 146
 local CARD_H  = 74
 local ROW_GAP = 8
-local TAB_BTN_W = 40
-local TAB_BTN_H = 40
+local TAB_BTN_W = 58
+local TAB_BTN_H = 42
 local TAB_ICON_W = 30
 local TAB_ICON_H = 30
-local GRID_TOP_Y = 70
-local GRID_BOTTOM_Y = display.contentHeight - 96
+local GRID_TOP_Y = 50
+local GRID_BOTTOM_Y = display.contentHeight - 58
 
 local STAT_ICONS = {
     attack  = "assets/sprites/ui/icons/atk.png",
@@ -63,14 +64,14 @@ end
 
 local TABS = {
     -- row 1
-    { icon="assets/sprites/ui/icons/tabs/home_I.png",   key="home",     row=1 },
-    { icon="assets/sprites/ui/icons/tabs/pet_I.png",    key="pets",     row=1 },
-    { icon="assets/sprites/ui/icons/tabs/weapons.png",  key="weapons",  row=1 },
-    { icon="assets/sprites/ui/icons/tabs/armor.png",    key="armor",    row=1 },
+    { icon="assets/sprites/ui/icons/tabs/home_I.png",   key="home",     label="HOME",     row=1 },
+    { icon="assets/sprites/ui/icons/tabs/pet_I.png",    key="pets",     label="PETS",     row=1 },
+    { icon="assets/sprites/ui/icons/tabs/weapons.png",  key="weapons",  label="WEAPONS",  row=1 },
+    { icon="assets/sprites/ui/icons/tabs/armor.png",    key="armor",    label="ARMOR",    row=1 },
     -- row 2
-    { icon="assets/sprites/ui/icons/tabs/costumes.png", key="costumes", row=2 },
-    { icon="assets/sprites/ui/icons/tabs/others.png",   key="more",     row=2 },
-    { icon="assets/sprites/ui/icons/tabs/auction.png",  key="auction",  row=2 },
+    { icon="assets/sprites/ui/icons/tabs/costumes.png", key="costumes", label="COSTUME",  row=2 },
+    { icon="assets/sprites/ui/icons/tabs/others.png",   key="more",     label="OTHER",    row=2 },
+    { icon="assets/sprites/ui/icons/tabs/auction.png",  key="auction",  label="AUCTION",  row=2 },
 }
 
 local ARMOR_SLOTS = {
@@ -103,6 +104,8 @@ local shopScroll
 local tabButtons   = {}   -- track tab button groups for active highlight
 local categoryText
 local shopInputLocked = false
+local auctionPage = 1
+local publicAuctionData = { auctions={}, page=1, totalPages=1 }
 
 -- forward declare so popup can call it
 local buildGrid
@@ -305,7 +308,7 @@ local function buildMiscPlaceholder()
         "Gold: " .. tostring(player.gold or 0),
         "Energy: " .. tostring(player.energy or 0),
         "Diamonds: " .. tostring(player.diamonds or 0),
-    }, { 1.0, 0.84, 0.24 }, "assets/sprites/ui/icons/gold.png", 18, 18)
+    }, { 1.0, 0.84, 0.24 }, "assets/sprites/ui/icons/gold.png", 16, 16)
 
     summaryCard(CX + 78, 220, 138, 104, "CHESTS", {
         "Common: " .. tostring(chests.common or 0),
@@ -321,16 +324,20 @@ local function buildMiscPlaceholder()
 end
 
 local function buildDockPositions(cx, sh)
-    local row1Y = sh - 41
-    local row2Y = sh - 1
+    local row1Y = sh - 8
+    local row2Y = sh + 40
+    local leftX1 = cx - 139
+    local leftX2 = cx - 77
+    local rightX1 = cx + 77
+    local rightX2 = cx + 139
     return {
-        { x = cx - 140, y = row1Y },
-        { x = cx - 93, y = row1Y },
-        { x = cx - 46, y = row1Y },
-        { x = cx + 1, y = row1Y },
-        { x = cx + 48, y = row1Y },
-        { x = cx + 95,  y = row1Y },
-        { x = cx + 140, y = row1Y },
+        { x = leftX1,  y = row1Y },
+        { x = leftX2,  y = row1Y },
+        { x = leftX1,  y = row2Y },
+        { x = leftX2,  y = row2Y },
+        { x = rightX1, y = row1Y },
+        { x = rightX2, y = row1Y },
+        { x = rightX1, y = row2Y },
     }
 end
 
@@ -624,7 +631,7 @@ local function showItemPopup(item)
         makeQtyButton(cx - 104, "-", -1)
         makeQtyButton(cx + 52, "+", 1)
     end
-    local priceIcon = display.newImageRect(content, "assets/sprites/ui/icons/gold.png", 45, 45)
+    local priceIcon = display.newImageRect(content, "assets/sprites/ui/icons/gold.png", 16, 16)
     priceIcon.x = cx - panelW * 0.5 + 32
     priceIcon.y = priceY
     priceText = display.newText({
@@ -746,6 +753,185 @@ local function showItemPopup(item)
     ui.popupOpen(overlay, { content }, { overlayAlpha = 0.72, startScale = 0.2, time = 170 })
 end
 
+local function secondsLeftText(endsAt)
+    local y, mo, d, h, mi, s = tostring(endsAt or ""):match("^(%d+)%-(%d+)%-(%d+)T(%d+):(%d+):(%d+)")
+    if not y then return "" end
+    local target = os.time({ year=tonumber(y), month=tonumber(mo), day=tonumber(d), hour=tonumber(h), min=tonumber(mi), sec=tonumber(s) })
+    local left = math.max(0, target - os.time())
+    local hours = math.floor(left / 3600)
+    local mins = math.floor((left % 3600) / 60)
+    if hours > 0 then return tostring(hours) .. "h " .. tostring(mins) .. "m" end
+    return tostring(math.floor(left / 60)) .. "m"
+end
+
+local function showAuctionBidPopup(auction)
+    if activePopup then activePopup:removeSelf(); activePopup = nil end
+    local popupGroup = display.newGroup()
+    sceneGroupRef:insert(popupGroup)
+    activePopup = popupGroup
+
+    local overlay = display.newRect(popupGroup, display.contentCenterX, display.contentCenterY, display.actualContentWidth, display.actualContentHeight)
+    overlay:setFillColor(0,0,0,0.72)
+    local cx, cy = display.contentCenterX, display.contentCenterY
+    local panelW, panelH = math.min(display.actualContentWidth - 34, 320), 292
+    local panel = display.newRoundedRect(popupGroup, cx, cy, panelW, panelH, 9)
+    panel:setFillColor(0.02,0.06,0.16,0.98)
+    panel.strokeWidth = 2
+    panel:setStrokeColor(0.24,0.70,1.0,0.76)
+
+    local icon = safeImageRect(popupGroup, auction.sprite, 92, 92)
+    if icon then
+        icon.x = cx
+        icon.y = cy - 80
+    end
+    display.newText({
+        parent=popupGroup, text=auction.name or "Auction Item",
+        x=cx, y=cy - 22, width=panelW - 40,
+        font=ui.FONT_BOLD, fontSize=14, align="center",
+    }):setFillColor(0.88,0.96,1.0)
+    display.newText({
+        parent=popupGroup,
+        text="Top bid: " .. tostring(auction.price or 0) .. "g  -  " .. tostring(auction.topBidder or "None"),
+        x=cx, y=cy + 8, width=panelW - 36,
+        font=ui.FONT_BOLD, fontSize=10, align="center",
+    }):setFillColor(1.0,0.82,0.20)
+    display.newText({
+        parent=popupGroup,
+        text="Max: " .. tostring(auction.maxPrice or 0) .. "g    Ends: " .. secondsLeftText(auction.endsAt),
+        x=cx, y=cy + 28, width=panelW - 36,
+        font=ui.FONT_BOLD, fontSize=8, align="center",
+    }):setFillColor(0.54,0.72,0.96)
+
+    local nextBid = auction.nextBid or ((auction.price or 0) + 250)
+    local bidBtn = display.newRoundedRect(popupGroup, cx, cy + 82, 172, 38, 8)
+    bidBtn:setFillColor(0.04,0.18,0.42,0.98)
+    bidBtn.strokeWidth = 1.6
+    bidBtn:setStrokeColor(0.30,0.78,1.0,0.82)
+    display.newText({
+        parent=popupGroup, text="BID " .. tostring(nextBid) .. "g",
+        x=cx, y=cy + 82, font=ui.FONT_BOLD, fontSize=12,
+    }):setFillColor(0.84,0.96,1.0)
+    bidBtn:addEventListener("tap", function()
+        api.auctions.bidPublic(auction.auctionId, {}, function(response)
+            if response and response.ok and response.data then
+                if response.data.player then
+                    sync.applyPlayerSnapshot(response.data.player, saveUtil.activeSlot)
+                    if goldText then goldText.text = tostring((saveUtil.load() or {}).gold or 0) end
+                end
+                if activePopup then activePopup:removeSelf(); activePopup = nil end
+                buildGrid()
+            end
+        end)
+        return true
+    end)
+
+    local function closePopup()
+        if activePopup then activePopup:removeSelf(); activePopup = nil end
+        return true
+    end
+    overlay:addEventListener("tap", closePopup)
+end
+
+local function buildAuctionGrid()
+    local ph = display.newGroup()
+    sceneGroupRef:insert(ph)
+    shopScroll = ph
+
+    local contentLeft = 16
+    local contentRight = display.actualContentWidth - 16
+    local contentWidth = contentRight - contentLeft
+    local scrollTop = GRID_TOP_Y + 8
+    local controlsY = GRID_BOTTOM_Y - 24
+    local scrollBottom = controlsY - 30
+
+    local auctions = publicAuctionData.auctions or {}
+    local cols = 2
+    local cardW = (contentWidth - 18) / 2
+    local cardH = 56
+    local gapX, gapY = 8, 7
+    local startX = contentLeft + cardW * 0.5 + 4
+    local startY = scrollTop + cardH * 0.5 + 4
+
+    local frame = display.newRoundedRect(ph, contentLeft + contentWidth * 0.5, (scrollTop + scrollBottom) * 0.5, contentWidth + 4, scrollBottom - scrollTop + 8, 8)
+    frame:setFillColor(0,0,0,0)
+    frame.strokeWidth = 2
+    frame:setStrokeColor(0.22,0.62,1.0,0.58)
+    frame.isHitTestable = false
+
+    if #auctions == 0 then
+        display.newText({
+            parent=ph, text="No public auctions",
+            x=display.contentCenterX, y=(scrollTop + scrollBottom) * 0.5,
+            font=ui.FONT_BOLD, fontSize=16, align="center",
+        }):setFillColor(0.4,0.8,1)
+    end
+
+    for i, auction in ipairs(auctions) do
+        local col = (i - 1) % cols
+        local row = math.floor((i - 1) / cols)
+        local x = startX + col * (cardW + gapX)
+        local y = startY + row * (cardH + gapY)
+        local card = display.newRoundedRect(ph, x, y, cardW, cardH, 7)
+        card:setFillColor(0.03,0.07,0.18,0.96)
+        card.strokeWidth = 1.3
+        card:setStrokeColor(0.30,0.72,1.0,0.58)
+        local icon = safeImageRect(ph, auction.sprite, 38, 38)
+        if icon then
+            icon.x = x - cardW * 0.5 + 27
+            icon.y = y
+        end
+        local name = display.newText({
+            parent=ph, text=oneLineName(auction.name, 15),
+            x=x - cardW * 0.5 + 52, y=y - 11,
+            width=cardW - 58, font=ui.FONT_BOLD, fontSize=8, align="left",
+        })
+        name.anchorX = 0
+        name:setFillColor(0.88,0.95,1.0)
+        local price = display.newText({
+            parent=ph, text=tostring(auction.price or 0) .. "g",
+            x=x - cardW * 0.5 + 52, y=y + 8,
+            width=cardW - 58, font=ui.FONT_BOLD, fontSize=10, align="left",
+        })
+        price.anchorX = 0
+        price:setFillColor(0.72,1.0,0.80)
+        card:addEventListener("tap", function()
+            showAuctionBidPopup(auction)
+            return true
+        end)
+    end
+
+    local totalPages = publicAuctionData.totalPages or 1
+    local prev = display.newRoundedRect(ph, display.contentCenterX - 96, controlsY, 76, 28, 7)
+    prev:setFillColor(0.04,0.10,0.24, auctionPage <= 1 and 0.36 or 0.96)
+    prev.strokeWidth = 1.3
+    prev:setStrokeColor(0.24,0.62,1.0, auctionPage <= 1 and 0.30 or 0.72)
+    display.newText({ parent=ph, text="PREV", x=prev.x, y=prev.y, font=ui.FONT_BOLD, fontSize=9 }):setFillColor(0.78,0.92,1.0)
+    local next = display.newRoundedRect(ph, display.contentCenterX + 96, controlsY, 76, 28, 7)
+    next:setFillColor(0.04,0.10,0.24, auctionPage >= totalPages and 0.36 or 0.96)
+    next.strokeWidth = 1.3
+    next:setStrokeColor(0.24,0.62,1.0, auctionPage >= totalPages and 0.30 or 0.72)
+    display.newText({ parent=ph, text="NEXT", x=next.x, y=next.y, font=ui.FONT_BOLD, fontSize=9 }):setFillColor(0.78,0.92,1.0)
+    display.newText({
+        parent=ph, text="PAGE " .. tostring(auctionPage) .. "/" .. tostring(totalPages),
+        x=display.contentCenterX, y=controlsY, font=ui.FONT_BOLD, fontSize=9,
+    }):setFillColor(0.60,0.82,1.0)
+
+    prev:addEventListener("tap", function()
+        if auctionPage > 1 then
+            auctionPage = auctionPage - 1
+            buildGrid()
+        end
+        return true
+    end)
+    next:addEventListener("tap", function()
+        if auctionPage < totalPages then
+            auctionPage = auctionPage + 1
+            buildGrid()
+        end
+        return true
+    end)
+end
+
 -------------------------------------------------
 -- BUILD GRID
 -------------------------------------------------
@@ -753,6 +939,7 @@ buildGrid = function()
     if shopScroll then
         if shopScroll._fadeTop and shopScroll._fadeTop.removeSelf then shopScroll._fadeTop:removeSelf() end
         if shopScroll._fadeBottom and shopScroll._fadeBottom.removeSelf then shopScroll._fadeBottom:removeSelf() end
+        if shopScroll._scrollFrame and shopScroll._scrollFrame.removeSelf then shopScroll._scrollFrame:removeSelf() end
         shopScroll:removeSelf()
         shopScroll = nil
     end
@@ -780,18 +967,13 @@ buildGrid = function()
     end
 
     if activeTab == "auction" then
-        local ph = display.newGroup()
-        sceneGroupRef:insert(ph)
-        shopScroll = ph
-
-        local labels = {
-            auction  = "Guild Auction\ncoming soon",
-        }
-        display.newText({
-            parent=ph, text=labels[activeTab],
-            x=display.contentCenterX, y=display.contentCenterY - 40,
-            font=ui.FONT_BOLD, fontSize=18, align="center"
-        }):setFillColor(0.4, 0.8, 1)
+        api.auctions.public(auctionPage, 12, function(response)
+            if activeTab ~= "auction" then return end
+            publicAuctionData = (response and response.ok and response.data) or { auctions={}, page=auctionPage, totalPages=1 }
+            auctionPage = publicAuctionData.page or auctionPage
+            buildAuctionGrid()
+            if showRadial then showRadial() end
+        end)
         return
     end
 
@@ -891,9 +1073,9 @@ buildGrid = function()
                 }):setFillColor(1, 0.25, 0.25)
             else
                 local gi = display.newImageRect(
-                    row, "assets/sprites/ui/icons/gold.png", 32, 32
+                    row, "assets/sprites/ui/icons/gold.png", 16, 16
                 )
-                gi.x = textLeft + 146; gi.y = y + 18
+                gi.x = textLeft + 148; gi.y = y + 18
                 local priceText = display.newText({
                     parent=row, text=tostring(getShopPrice(item)),
                     x=textLeft + 160, y=y+18, width=textW - 20, font=ui.FONT_BOLD, fontSize=16, align="left"
@@ -923,8 +1105,21 @@ buildGrid = function()
     local fadeBottom = display.newRect(sceneGroupRef, contentLeft + contentWidth * 0.5, scrollBottom + 7, contentWidth, 14)
     fadeBottom:setFillColor(0.015, 0.04, 0.11, 0.96)
     fadeBottom.isHitTestable = false
+    local scrollFrame = display.newRoundedRect(
+        sceneGroupRef,
+        contentLeft + contentWidth * 0.5,
+        (scrollTop + scrollBottom) * 0.5,
+        contentWidth + 4,
+        (scrollBottom - scrollTop) + 8,
+        8
+    )
+    scrollFrame:setFillColor(0, 0, 0, 0)
+    scrollFrame.strokeWidth = 2
+    scrollFrame:setStrokeColor(0.22, 0.62, 1.0, 0.58)
+    scrollFrame.isHitTestable = false
     shopScroll._fadeTop = fadeTop
     shopScroll._fadeBottom = fadeBottom
+    shopScroll._scrollFrame = scrollFrame
 
     if showRadial then
         showRadial()
@@ -954,24 +1149,24 @@ function scene:create(event)
     edgeLineR:setFillColor(0.13, 0.54, 1.0, 0.58)
     edgeLineR.isHitTestable = false
 
-    local headerPanel = display.newRoundedRect(sceneGroup, display.contentCenterX, 20, display.actualContentWidth - 24, 38, 8)
+    local headerPanel = display.newRoundedRect(sceneGroup, display.contentCenterX, 15, display.actualContentWidth - 24, 34, 8)
     headerPanel:setFillColor(0.02, 0.06, 0.16, 0.96)
     headerPanel.strokeWidth = 1
     headerPanel:setStrokeColor(0.22, 0.52, 1.0, 0.36)
 
-    local headerLine = display.newRect(sceneGroup, display.contentCenterX, 39, display.actualContentWidth - 48, 1)
+    local headerLine = display.newRect(sceneGroup, display.contentCenterX, 32, display.actualContentWidth - 48, 1)
     headerLine:setFillColor(0.30, 0.70, 1.0, 0.28)
 
     local shopTitle = display.newText({
         parent=sceneGroup, text="SHOP",
-        x=22, y=14, font=ui.FONT_BOLD, fontSize=18, align="left"
+        x=22, y=10, font=ui.FONT_BOLD, fontSize=18, align="left"
     })
     shopTitle.anchorX = 0
     shopTitle:setFillColor(0.38, 0.86, 1.0)
 
     categoryText = display.newText({
         parent=sceneGroup, text="ALL STOCK",
-        x=22, y=29, font=ui.FONT_BOLD, fontSize=8, align="left"
+        x=22, y=24, font=ui.FONT_BOLD, fontSize=8, align="left"
     })
     categoryText.anchorX = 0
     categoryText:setFillColor(0.50, 0.74, 1.0, 0.82)
@@ -980,7 +1175,7 @@ function scene:create(event)
     local goldGroup = display.newGroup()
     sceneGroup:insert(goldGroup)
 
-    local goldChip = display.newRoundedRect(goldGroup, display.actualContentWidth - 80, 20, 96, 24, 8)
+    local goldChip = display.newRoundedRect(goldGroup, display.actualContentWidth - 80, 15, 96, 24, 8)
     goldChip:setFillColor(0.08, 0.10, 0.22, 0.96)
     goldChip.strokeWidth = 1.5
     goldChip:setStrokeColor(1.0, 0.82, 0.20, 0.50)
@@ -989,11 +1184,11 @@ function scene:create(event)
         goldGroup, "assets/sprites/ui/icons/gold.png", 16, 16
     )
     goldIcon.x = display.actualContentWidth - 118
-    goldIcon.y = 20
+    goldIcon.y = 15
 
     goldText = display.newText({
         parent=goldGroup, text=tostring(saveUtil.load().gold or 0),
-        x=display.actualContentWidth - 56, y=20,
+        x=display.actualContentWidth - 56, y=15,
         font=ui.FONT_BOLD, fontSize=15, align="right"
     })
     goldText.anchorX = 1
@@ -1007,14 +1202,18 @@ function scene:create(event)
     reelPanel.isHitTestable = false
 
     -------------------------------------------------
-    -- TAB DOCK - compact bottom rows above the radial
+    -- TAB DOCK - compact bottom rows
     -------------------------------------------------
     local tabBar  = display.newGroup()
     sceneGroup:insert(tabBar)
     tabButtons = {}
 
-    local dockLine = display.newRoundedRect(tabBar, display.contentCenterX, display.contentHeight - 12, 72, 1, 1)
-    dockLine:setFillColor(0.22, 0.62, 1.0, 0.10)
+    local dockBg = display.newRoundedRect(tabBar, display.contentCenterX, display.contentHeight + 24, display.actualContentWidth - 16, 116, 10)
+    dockBg:setFillColor(0.015, 0.04, 0.11, 0.90)
+    dockBg.strokeWidth = 1
+    dockBg:setStrokeColor(0.13, 0.48, 0.88, 0.30)
+    dockBg.isHitTestable = false
+
 
     local function makeTabBtn(t, x, y)
         local grp = display.newGroup()
@@ -1035,18 +1234,14 @@ function scene:create(event)
         iconImg.x = x
         iconImg.y = y
 
-        bg:addEventListener("tap", function()
+        local function onTap()
             activeTab = t.key
             composer.setVariable("shopTab", t.key)
             buildGrid()
             return true
-        end)
-        iconImg:addEventListener("tap", function()
-            activeTab = t.key
-            composer.setVariable("shopTab", t.key)
-            buildGrid()
-            return true
-        end)
+        end
+        bg:addEventListener("tap", onTap)
+        iconImg:addEventListener("tap", onTap)
 
         table.insert(tabButtons, {
             key     = t.key,
@@ -1061,9 +1256,6 @@ function scene:create(event)
         local pos = dockPositions[i]
         makeTabBtn(t, pos.x, pos.y)
     end
-
-    local dockLineLower = display.newRoundedRect(tabBar, display.contentCenterX, display.contentHeight - 120, 220, 1, 1)
-    dockLineLower:setFillColor(0.22, 0.62, 1.0, 0.10)
 
     showRadial = function()
         radialMenu.show(sceneGroup, {

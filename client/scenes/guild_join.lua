@@ -144,7 +144,7 @@ local function buildResults(sceneView, query, serverResults)
 
         local infoT = display.newText({
             parent=resultGroup,
-            text="Leader " .. guild.leader .. "  •  Lv." .. guild.level .. "  •  " .. guild.members .. "/" .. guild.maxMembers,
+            text="Leader " .. guild.leader .. "  -  Lv." .. guild.level .. "  -  " .. guild.members .. "/" .. guild.maxMembers,
             x=24, y=y + 2, width=panelW - 120, font=ui.FONT_BOLD, fontSize=9, align="left"
         })
         infoT.anchorX = 0
@@ -244,7 +244,7 @@ function scene:create(event)
     inputBox:setStrokeColor(0.20, 0.55, 1.0, 0.58)
 
     local searchHint = addSearchBase(display.newText({
-        parent=sg, text="Type a guild name and press Enter",
+        parent=sg, text="Type a guild name and tap Search",
         x=24, y=82, width=SW - 48, font=ui.FONT_BOLD, fontSize=9, align="left"
     }))
     searchHint.anchorX = 0
@@ -262,7 +262,7 @@ function scene:create(event)
     searchBtn.strokeWidth = 1.5
     searchBtn:setStrokeColor(0.28, 0.68, 1.0, 0.82)
     local searchBtnText = addSearchBase(display.newText({
-        parent=sg, text="ENTER",
+        parent=sg, text="SEARCH",
         x=searchBtn.x, y=searchBtn.y, font=ui.FONT_BOLD, fontSize=9
     }))
     searchBtnText:setFillColor(0.78, 0.92, 1.0)

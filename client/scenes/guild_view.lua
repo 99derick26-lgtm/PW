@@ -540,7 +540,7 @@ drawBottom = function()
             end)
             return true
         end },
-        { "GUILDS CHAT", function() drawChat(); return true end },
+        { "CHAT", function() drawChat(); return true end },
         { "MEMBERS", function() drawMembers(); return true end },
     }
     if canDeclareWarOnActiveGuild() then

@@ -9,6 +9,7 @@ local ui       = require("utils.ui")
 local guildNav = require("utils.guild_nav")
 local guildContext = require("utils.guild_context")
 local battleContext = require("utils.battle_context")
+local shell    = require("utils.guild_scene_shell")
 
 local SW = display.contentWidth
 local SH = display.contentHeight
@@ -20,9 +21,6 @@ local CONTENT_TOP = HEADER_H + 12
 local CONTENT_BOT = guildNav.contentBottom()
 local CONTENT_H = CONTENT_BOT - CONTENT_TOP
 
-local FRAME_SMALL = "assets/sprites/ui/frames/border_small.png"
-local FRAME_THIN_L = "assets/sprites/ui/frames/thin_large.png"
-local FRAME_THIN_S = "assets/sprites/ui/frames/thin_small.png"
 local TROPHY_ICON = "assets/sprites/ui/icons/win.png"
 local WAR_CARD_H = 84
 local WAR_CARD_GAP = 10
@@ -32,20 +30,6 @@ local targetField
 local activeGuild
 local wars = {}
 local refreshWars
-
-local function drawFrame(parent, x, y, w, h, path)
-    local ok, img = pcall(display.newImageRect, parent, path, w, h)
-    if ok and img then
-        img.x = x
-        img.y = y
-        return img
-    end
-    local r = display.newRoundedRect(parent, x, y, w, h, 8)
-    r:setFillColor(0.03, 0.08, 0.20, 0.95)
-    r.strokeWidth = 1.5
-    r:setStrokeColor(0.18, 0.65, 0.42, 0.70)
-    return r
-end
 
 local function getCurrentGuild()
     local player = saveUtil.load()
@@ -79,29 +63,6 @@ local function text(parent, value, x, y, size, color, width, align)
     return obj
 end
 
-local function makeButton(parent, x, y, w, h, label, color, onTap)
-    local group = display.newGroup()
-    parent:insert(group)
-    local ok, frame = pcall(display.newImageRect, group, FRAME_THIN_L, w, h)
-    local hit
-    if ok and frame then
-        frame.x = x
-        frame.y = y
-        hit = frame
-    else
-        hit = display.newRoundedRect(group, x, y, w, h, 7)
-        hit:setFillColor(0.03, 0.08, 0.18, 0.96)
-        hit.strokeWidth = 1.5
-        hit:setStrokeColor(color[1], color[2], color[3], 0.78)
-    end
-    text(group, label, x, y, 11, color, w - 12)
-    hit:addEventListener("tap", function()
-        if onTap then onTap() end
-        return true
-    end)
-    return group
-end
-
 local function normalizeWarSide(list, side)
     local out = {}
     for i, fighter in ipairs(list or {}) do
@@ -117,9 +78,10 @@ local function normalizeWarSide(list, side)
     return out
 end
 
-local function playWar(war)
-    local attackers = normalizeWarSide(war.attackers or {}, "player")
-    local defenders = normalizeWarSide(war.defenders or {}, "enemy")
+local function playWar(war, round)
+    round = round or {}
+    local attackers = normalizeWarSide(round.attackers or war.attackers or {}, "player")
+    local defenders = normalizeWarSide(round.defenders or war.defenders or {}, "enemy")
     if not attackers[1] or not defenders[1] then
         native.showAlert("War", "That war slot is missing fighters.", { "OK" })
         return
@@ -135,6 +97,7 @@ local function playWar(war)
 
     battleContext.startGuildWar(opponent, {
         warId = war.warId,
+        round = round.round,
         attackerGuildId = war.attackerGuildId,
         attackerGuildName = war.attackerGuildName,
         defenderGuildId = war.defenderGuildId,
@@ -145,11 +108,12 @@ local function playWar(war)
     composer.gotoScene("scenes.arena_battle", { effect="slideLeft", time=220 })
 end
 
-local function warWinnerGuildId(war)
+local function warWinnerGuildId(war, round)
     if war.winnerGuildId then return war.winnerGuildId end
 
-    local attackers = normalizeWarSide(war.attackers or {}, "player")
-    local defenders = normalizeWarSide(war.defenders or {}, "enemy")
+    round = round or {}
+    local attackers = normalizeWarSide(round.attackers or war.attackers or {}, "player")
+    local defenders = normalizeWarSide(round.defenders or war.defenders or {}, "enemy")
     if not attackers[1] or not defenders[1] then return nil end
 
     local player = attackers[1]
@@ -193,37 +157,33 @@ local function displayMatchup(war)
     }
 end
 
-local function buildWarCard(parent, war, index, startY)
+local function buildWarCard(parent, war, round, index, startY)
     local cardW = SW - 26
     local cardH = WAR_CARD_H
     local x = 0
     local y = startY + (index - 1) * (cardH + WAR_CARD_GAP)
-    local okFrame, frame = pcall(display.newImageRect, parent, FRAME_THIN_S, cardW, cardH)
-    local bg
-    if okFrame and frame then
-        frame.x = x
-        frame.y = y
-        bg = frame
-    else
-        bg = display.newRoundedRect(parent, x, y, cardW, cardH, 8)
-        bg:setFillColor(0.04, 0.08, 0.17, 0.96)
-        bg.strokeWidth = 2
-        bg:setStrokeColor(0.18, 0.82, 0.68, 0.74)
-    end
+    local bg = display.newRoundedRect(parent, x, y, cardW, cardH, 8)
+    bg:setFillColor(0.03, 0.08, 0.18, 0.96)
+    bg.strokeWidth = 1.8
 
-    local winnerId = warWinnerGuildId(war)
+    local winnerId = warWinnerGuildId(war, round)
     local matchup = displayMatchup(war)
     local activeId = activeGuild and activeGuild.guildId
-    local titleColor = {1.0, 0.72, 0.62}
+    local titleColor = {0.78, 0.92, 1.0}
     if winnerId and activeId == winnerId then
         titleColor = {0.34, 1.0, 0.48}
+        bg:setStrokeColor(0.22, 0.90, 0.42, 0.72)
     elseif winnerId and (activeId == war.attackerGuildId or activeId == war.defenderGuildId) then
         titleColor = {1.0, 0.32, 0.28}
+        bg:setStrokeColor(1.0, 0.30, 0.28, 0.72)
+    else
+        bg:setStrokeColor(0.22, 0.66, 1.0, 0.64)
     end
 
-    local titleY = y
+    local titleY = y + 4
     local leftX = x - cardW * 0.19
     local rightX = x + cardW * 0.19
+    text(parent, "ROUND " .. tostring((round and round.round) or index), x, y - 24, 8, {0.44, 0.86, 1.0}, cardW - 40)
     text(parent, matchup.firstName, leftX, titleY, 12, titleColor, cardW * 0.36)
     text(parent, "VS", x, titleY, 11, titleColor, 38)
     text(parent, matchup.secondName, rightX, titleY, 12, titleColor, cardW * 0.36)
@@ -243,7 +203,7 @@ local function buildWarCard(parent, war, index, startY)
     end
 
     local function onTap()
-        playWar(war)
+        playWar(war, round)
         return true
     end
 
@@ -257,7 +217,11 @@ end
 
 local function buildContent()
     clearContent()
-    local scrollH = math.max(CONTENT_H, 104 + math.max(1, #wars) * (WAR_CARD_H + WAR_CARD_GAP))
+    local cardCount = 0
+    for _, war in ipairs(wars) do
+        cardCount = cardCount + math.max(1, #(war.rounds or {}))
+    end
+    local scrollH = math.max(CONTENT_H, 104 + math.max(1, cardCount) * (WAR_CARD_H + WAR_CARD_GAP))
     local topY = -scrollH * 0.5
     local titleY = topY + 30
     local firstCardY = topY + 84
@@ -292,10 +256,20 @@ local function buildContent()
         return
     end
 
+    local cardIndex = 1
     for i = 1, #wars do
-        buildWarCard(contentGroup, wars[i], i, firstCardY)
+        local rounds = wars[i].rounds or {}
+        if #rounds == 0 then
+            buildWarCard(contentGroup, wars[i], nil, cardIndex, firstCardY)
+            cardIndex = cardIndex + 1
+        else
+            for _, round in ipairs(rounds) do
+                buildWarCard(contentGroup, wars[i], round, cardIndex, firstCardY)
+                cardIndex = cardIndex + 1
+            end
+        end
     end
-    local spacer = display.newRect(contentGroup, 0, firstCardY + #wars * (WAR_CARD_H + WAR_CARD_GAP), 1, 1)
+    local spacer = display.newRect(contentGroup, 0, firstCardY + cardIndex * (WAR_CARD_H + WAR_CARD_GAP), 1, 1)
     spacer:setFillColor(0, 0, 0, 0.01)
 end
 
@@ -326,11 +300,10 @@ function scene:create(event)
         ln.isHitTestable = false
     end
 
-    drawFrame(sg, CX, HEADER_Y, SW - 6, HEADER_H, FRAME_SMALL)
-    display.newRect(sg, CX, HEADER_H, SW, 2):setFillColor(0.15, 0.55, 0.35, 0.55)
-    text(sg, "WAR", CX, HEADER_Y, 20, {1.0, 0.35, 0.25}, SW - 40)
+    shell.drawTitleBanner(sg, "WAR", { y=36, height=54, color={1.0, 0.35, 0.30} })
 
     guildNav.build(sg, "WAR")
+    shell.drawCloseToHome(sg, activeGuild)
 end
 
 function scene:show(event)

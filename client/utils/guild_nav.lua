@@ -19,7 +19,7 @@ function M.bottomY()
 end
 
 function M.contentBottom()
-    return M.bottomY() - M.HEIGHT * 0.5 - 4
+    return M.bottomY() - M.HEIGHT * 0.5 - 6
 end
 
 function M.build(parent, activeLabel)

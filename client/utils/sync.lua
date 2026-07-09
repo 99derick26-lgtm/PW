@@ -38,6 +38,7 @@ local ONLINE_PLAYER_KEYS = {
     "messages",
     "notifications",
     "squad",
+    "rival",
     "tournaments",
 }
 

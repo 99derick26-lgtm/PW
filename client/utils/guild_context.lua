@@ -36,6 +36,8 @@ local function compactGuild(guild, forcedRole)
         role = forcedRole or guild.role or "MEMBER",
         desc = guild.desc or guild.description,
         description = guild.description or guild.desc,
+        leagueSlots = guild.leagueSlots,
+        leagueHistory = guild.leagueHistory,
     }
 end
 
@@ -56,6 +58,8 @@ local function upsertGuildList(player, guild, role)
             entry.jailCount = guild.jailCount or entry.jailCount
             entry.desc = guild.desc or guild.description or entry.desc
             entry.description = guild.description or guild.desc or entry.description
+            entry.leagueSlots = guild.leagueSlots or entry.leagueSlots
+            entry.leagueHistory = guild.leagueHistory or entry.leagueHistory
             return
         end
     end

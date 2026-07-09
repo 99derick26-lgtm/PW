@@ -29,6 +29,16 @@ local PET_SLOT_SIZE   = 56
 local PET_SLOT_PAD    = 10
 local ARMOR_SLOT_SET  = { helmet=true, chest=true, gloves=true, boots=true }
 local ACCESSORY_SLOT_SET = { necklace=true, ring=true, charm=true }
+local RESOURCE_SELL_PRICES = {
+    resource_augment_attack = 1500,
+    resource_augment_defense = 1500,
+    resource_augment_health = 1500,
+    resource_augment_speed = 1500,
+    resource_crystal_green = 1500,
+    resource_crystal_blue = 2000,
+    resource_crystal_orange = 2500,
+    resource_crystal_purple = 3000,
+}
 
 local BAG_GRID_COLS      = 6
 local BAG_GRID_ROWS      = 4
@@ -83,10 +93,10 @@ local function drawStatBanner(parent, statKey, x, y, value)
 end
 
 local TABS = {
-    { key="weapons",  icon="assets/sprites/ui/icons/tabs/weapons.png"  },
-    { key="armor",    icon="assets/sprites/ui/icons/tabs/armor.png"    },
-    { key="costumes", icon="assets/sprites/ui/icons/tabs/costumes.png" },
-    { key="other",    icon="assets/sprites/ui/icons/tabs/others.png"   },
+    { key="weapons",  label="WEAPONS",  icon="assets/sprites/ui/icons/tabs/weapons.png"  },
+    { key="armor",    label="ARMOR",    icon="assets/sprites/ui/icons/tabs/armor.png"    },
+    { key="costumes", label="COSTUME",  icon="assets/sprites/ui/icons/tabs/costumes.png" },
+    { key="other",    label="OTHER",    icon="assets/sprites/ui/icons/tabs/others.png"   },
 }
 
 local RADIAL_INNER = {
@@ -807,6 +817,10 @@ rebuildBag = function()
         local isActive = (tb.key == activeTab)
         tb.bg.alpha      = isActive and 1.0  or 0.35
         tb.iconImg.alpha = isActive and 1.0  or 0.55
+        if tb.labelText then
+            tb.labelText.alpha = isActive and 1.0 or 0.72
+            tb.labelText:setFillColor(isActive and 0.94 or 0.64, isActive and 1.0 or 0.78, isActive and 1.0 or 0.92)
+        end
         tb.glow.isVisible = isActive
     end
 
@@ -1030,7 +1044,8 @@ showItemPopup = function(item)
     end
 
     local actionY = cy + panelH * 0.5 - 34
-    local sellPrice = math.floor((item.price or 0) * (item.sellPercent or 0.5))
+    local sellPrice = RESOURCE_SELL_PRICES[item.id]
+        or math.floor((item.price or 0) * (item.sellPercent or 0.5))
     local isInjection = item.type == "injection"
     local canUpgrade = upgrades.hasTarget(item.id)
 
@@ -1337,10 +1352,15 @@ showItemPopup = function(item)
                 local p = saveUtil.load()
                 p.gold = (p.gold or 0) + sellPrice
 
-                for i = #p.inventory, 1, -1 do
-                    if p.inventory[i] == item.id then
-                        table.remove(p.inventory, i)
-                        break
+                local resourceKey = tostring(item.id or ""):match("^resource_(.+)$")
+                if resourceKey and p.materials and (p.materials[resourceKey] or 0) > 0 then
+                    p.materials[resourceKey] = p.materials[resourceKey] - 1
+                else
+                    for i = #p.inventory, 1, -1 do
+                        if p.inventory[i] == item.id then
+                            table.remove(p.inventory, i)
+                            break
+                        end
                     end
                 end
 
@@ -1603,19 +1623,25 @@ function scene:create(event)
     tabButtons = {}
 
     local H      = display.contentHeight
-    local btnW   = 48
-    local btnH   = 48
-    local iconSz = 34
-    local tabY   = H + 18
+    local btnW   = 66
+    local btnH   = 50
+    local iconSz = 24
+    local tabY   = H + 40
     local centerX = display.contentCenterX
-    local radialSpacing = 76
-    local sideGap = 64
+    local radialSpacing = 62
+    local sideGap = 70
     local tabXs = {
-        centerX + radialSpacing,
-        centerX + radialSpacing + sideGap,
         centerX - radialSpacing - sideGap,
         centerX - radialSpacing,
+        centerX + radialSpacing,
+        centerX + radialSpacing + sideGap,
     }
+
+    local dockBg = display.newRoundedRect(tabBar, centerX, H + 40, display.actualContentWidth - 16, 64, 10)
+    dockBg:setFillColor(0.015, 0.04, 0.11, 0.90)
+    dockBg.strokeWidth = 1
+    dockBg:setStrokeColor(0.13, 0.48, 0.88, 0.30)
+    dockBg.isHitTestable = false
 
     for i, t in ipairs(TABS) do
         local x   = tabXs[i]
@@ -1639,7 +1665,20 @@ function scene:create(event)
         -- icon
         local iconImg = display.newImageRect(grp, t.icon, iconSz, iconSz)
         iconImg.x = x
-        iconImg.y = tabY
+        iconImg.y = tabY - 9
+
+        local labelText = display.newText({
+            parent = grp,
+            text = t.label or string.upper(t.key or ""),
+            x = x,
+            y = tabY + 13,
+            width = btnW - 4,
+            font = ui.FONT_BOLD,
+            fontSize = 6,
+            align = "center"
+        })
+        labelText:setFillColor(0.74, 0.92, 1.0)
+        labelText.isHitTestable = false
 
         local function onTap()
             activeTab = t.key
@@ -1649,19 +1688,16 @@ function scene:create(event)
         end
         bg2:addEventListener("tap", onTap)
         iconImg:addEventListener("tap", onTap)
+        labelText:addEventListener("tap", onTap)
 
         table.insert(tabButtons, {
             key     = t.key,
             bg      = bg2,
             glow    = glow,
             iconImg = iconImg,
+            labelText = labelText,
         })
     end
-
-    local dockLineLeft = display.newRoundedRect(tabBar, centerX - 64, tabY, 38, 2, 2)
-    dockLineLeft:setFillColor(0.22, 0.62, 1.0, 0.16)
-    local dockLineRight = display.newRoundedRect(tabBar, centerX + 64, tabY, 38, 2, 2)
-    dockLineRight:setFillColor(0.22, 0.62, 1.0, 0.16)
 
     showRadial = function()
         radialMenu.show(sceneGroup, {

@@ -137,6 +137,203 @@ local function getTournamentInfo(mode, localState)
     }
 end
 
+local function levelBand(level)
+    level = tonumber(level) or 1
+    if level <= 10 then return "LV.1-10" end
+    if level <= 20 then return "LV.10-20" end
+    local startLevel = 21 + math.floor((level - 21) / 6) * 6
+    return "LV." .. startLevel .. "-" .. (startLevel + 5)
+end
+
+local function drawHeaderBanner(parent, y, title, subtitle, levelText)
+    local h = 50
+    local glow = display.newRoundedRect(parent, CX, y, SW - 8, h + 6, 12)
+    glow:setFillColor(0, 0, 0, 0)
+    glow.strokeWidth = 2
+    glow:setStrokeColor(0.12, 0.48, 1.0, 0.38)
+
+    local hdr = display.newRoundedRect(parent, CX, y, SW - 12, h, 10)
+    hdr:setFillColor(0.02, 0.06, 0.16, 0.96)
+    hdr.strokeWidth = 1.5
+    hdr:setStrokeColor(0.18, 0.38, 0.92, 0.48)
+
+    local topLine = display.newRect(parent, CX, y - h * 0.5 + 6, SW - 24, 2)
+    topLine:setFillColor(0.30, 0.66, 1.0, 0.62)
+
+    local band = display.newRoundedRect(parent, 54, y, 76, 28, 7)
+    band:setFillColor(0.06, 0.12, 0.28, 0.98)
+    band.strokeWidth = 1.3
+    band:setStrokeColor(0.28, 0.68, 1.0, 0.72)
+    display.newText({ parent=parent, text=levelText, x=54, y=y, font=ui.FONT_BOLD, fontSize=9 })
+        :setFillColor(0.78, 0.94, 1.0)
+
+    local titleText = display.newText({
+        parent=parent, text=title,
+        x=104, y=y - 6, font=ui.FONT_BOLD, fontSize=18, align="left"
+    })
+    titleText.anchorX = 0
+    titleText:setFillColor(0.40, 0.84, 1.0)
+
+    local subText = display.newText({
+        parent=parent, text=subtitle,
+        x=104, y=y + 10, font=ui.FONT_BOLD, fontSize=8, align="left"
+    })
+    subText.anchorX = 0
+    subText:setFillColor(0.42, 0.70, 1.0, 0.82)
+end
+
+local function portraitPath(visualId)
+    return "assets/sprites/characters/" .. tostring(visualId or "street_brawler") .. "/portrait.png"
+end
+
+local function drawPortraitNode(parent, x, y, item, imageSize, textWidth)
+    imageSize = imageSize or 46
+    textWidth = textWidth or 74
+
+    local okP, pic = pcall(display.newImageRect, parent, portraitPath(item.visualId), imageSize, imageSize)
+    if okP and pic then
+        pic.x = x
+        pic.y = y
+    end
+
+    local name = display.newText({
+        parent=parent, text=item.name or "Fighter",
+        x=x, y=y + imageSize * 0.5 + 11, width=textWidth,
+        font=ui.FONT_BOLD, fontSize=8, align="center"
+    })
+    name:setFillColor(0.92, 0.98, 1.0)
+    return pic
+end
+
+local function sampleEntrants(player, mode)
+    local visuals = AI_VISUALS
+    local names = { player.name or "You", "NullVex", "GridShade", "ByteRift", "IronPulse", "ChromeHex", "Sable", "Kira" }
+    local entrants = {}
+    for i = 1, 7 do
+        entrants[i] = {
+            name = names[i + 1] or ("Fighter" .. i),
+            visualId = visuals[((i - 1) % #visuals) + 1],
+        }
+    end
+    entrants[8] = {
+        name = mode == "crew" and "Your Squad" or (player.name or "You"),
+        visualId = (player.appearance and player.appearance.skinId) or player.skinId or "street_brawler",
+        isPlayer = true,
+    }
+    return entrants
+end
+
+local function buildBracketSample(player, mode)
+    local entrants = sampleEntrants(player, mode)
+    return {
+        winner = entrants[8],
+        finalists = { entrants[8], entrants[4] },
+        semis = { entrants[8], entrants[7], entrants[4], entrants[3] },
+    }
+end
+
+local function drawBracket(parent, player, mode, yTop)
+    local data = buildBracketSample(player, mode)
+    local lineColor = { 0.94, 0.97, 1.0, 0.88 }
+    local lineW = 3
+
+    local winnerY = yTop
+    local finalsY = yTop + 92
+    local semisY = yTop + 184
+
+    local function snap(v)
+        return math.floor(v + 0.5)
+    end
+
+    local winnerX = snap(CX)
+    local finalsX = { snap(CX - 66), snap(CX + 66) }
+    local semisX = { snap(CX - 126), snap(CX - 42), snap(CX + 42), snap(CX + 126) }
+
+    local lineGroup = display.newGroup()
+    parent:insert(lineGroup)
+
+    local function segment(x1, y1, x2, y2)
+        x1, y1, x2, y2 = snap(x1), snap(y1), snap(x2), snap(y2)
+        if x1 == x2 then
+            local top = math.min(y1, y2)
+            local h = math.max(lineW, math.abs(y2 - y1) + lineW)
+            local r = display.newRect(lineGroup, x1, top + h * 0.5, lineW, h)
+            r:setFillColor(unpack(lineColor))
+            return r
+        end
+        local left = math.min(x1, x2)
+        local w = math.max(lineW, math.abs(x2 - x1) + lineW)
+        local r = display.newRect(lineGroup, left + w * 0.5, y1, w, lineW)
+        r:setFillColor(unpack(lineColor))
+        return r
+    end
+
+    local function nodeTop(y, imageSize)
+        return snap(y - imageSize * 0.5 - 7)
+    end
+
+    local function nodeBottom(y, imageSize)
+        return snap(y + imageSize * 0.5 + 22)
+    end
+
+    local winnerBottom = nodeBottom(winnerY, 52)
+    local finalsTop = nodeTop(finalsY, 48)
+    local finalsBottom = nodeBottom(finalsY, 48)
+    local semisTop = nodeTop(semisY, 46)
+
+    local finalJunctionY = snap((winnerBottom + finalsTop) * 0.5)
+    local semiJunctionY = snap((finalsBottom + semisTop) * 0.5)
+
+    segment(winnerX, winnerBottom, winnerX, finalJunctionY)
+    segment(finalsX[1], finalJunctionY, finalsX[2], finalJunctionY)
+    for i = 1, 2 do
+        segment(finalsX[i], finalJunctionY, finalsX[i], finalsTop)
+    end
+
+    for i = 1, 2 do
+        local lx = finalsX[i]
+        local left = semisX[(i - 1) * 2 + 1]
+        local right = semisX[(i - 1) * 2 + 2]
+        segment(lx, finalsBottom, lx, semiJunctionY)
+        segment(left, semiJunctionY, right, semiJunctionY)
+        segment(left, semiJunctionY, left, semisTop)
+        segment(right, semiJunctionY, right, semisTop)
+    end
+
+    drawPortraitNode(parent, winnerX, winnerY, data.winner, 52, 90)
+
+    for i = 1, 2 do
+        drawPortraitNode(parent, finalsX[i], finalsY, data.finalists[i], 48, 78)
+    end
+
+    for i = 1, 4 do
+        drawPortraitNode(parent, semisX[i], semisY, data.semis[i], 46, 68)
+    end
+end
+
+local function getLastTournamentResult(player, mode)
+    local t = player.tournaments or {}
+    return t.lastResults and t.lastResults[mode]
+end
+
+local function recordTournamentResult(player, mode, result)
+    player.tournaments = player.tournaments or {}
+    player.tournaments.lastResults = player.tournaments.lastResults or {}
+    player.tournaments.lastResults[mode] = result
+    player.tournaments.champions = player.tournaments.champions or {}
+    table.insert(player.tournaments.champions, 1, {
+        name = result.winner or "Champion",
+        visualId = result.winner == (player.name or "You")
+            and ((player.appearance and player.appearance.skinId) or player.skinId or "street_brawler")
+            or AI_VISUALS[math.random(#AI_VISUALS)],
+        band = levelBand(player.level or 1),
+        mode = mode,
+    })
+    while #player.tournaments.champions > 12 do
+        table.remove(player.tournaments.champions)
+    end
+end
+
 -- Generate a random AI combatant table for combat.runBattle
 local function makeAICombatant(name, level, id)
     local base = 100 + level * 12
@@ -659,217 +856,253 @@ local function buildTeamTab(group)
     end)
 end
 
+local function makeNavButton(parent, x, y, label, onTap)
+    local btnW, btnH = 126, 33
+    local ok, btn = pcall(display.newImageRect, parent, "assets/sprites/ui/btn_nav.png", btnW, btnH)
+    if ok and btn then
+        btn.x, btn.y = x, y
+    else
+        btn = display.newRoundedRect(parent, x, y, btnW, btnH, 7)
+        btn:setFillColor(0.04, 0.11, 0.26, 0.96)
+        btn.strokeWidth = 1.4
+        btn:setStrokeColor(0.24, 0.68, 1.0, 0.82)
+    end
+    local txt = display.newText({
+        parent=parent, text=label,
+        x=x, y=y, font=ui.FONT_BOLD, fontSize=12, align="center"
+    })
+    txt:setFillColor(0.88, 0.98, 1.0)
+    btn:addEventListener("tap", function()
+        if onTap then onTap() end
+        return true
+    end)
+    return btn
+end
+
+local function showResultsList(mode)
+    local player = saveUtil.load()
+    local result = getLastTournamentResult(player, mode)
+
+    local popup = display.newGroup()
+    sceneRoot:insert(popup)
+
+    local dim = display.newRect(popup, CX, CY, SW, SH)
+    dim:setFillColor(0, 0, 0, 0.80)
+
+    local panelW, panelH = SW - 28, SH - 130
+    local panel = display.newRoundedRect(popup, CX, CY, panelW, panelH, 12)
+    panel:setFillColor(0.02, 0.06, 0.16, 0.98)
+    panel.strokeWidth = 2
+    panel:setStrokeColor(0.20, 0.62, 1.0, 0.86)
+
+    local topY = CY - panelH * 0.5 + 34
+    display.newText({
+        parent=popup, text="RESULTS",
+        x=CX, y=topY, font=ui.FONT_BOLD, fontSize=20
+    }):setFillColor(0.38, 0.86, 1.0)
+
+    local y = topY + 36
+    if not result then
+        display.newText({
+            parent=popup, text="No tournament battles recorded yet.",
+            x=CX, y=y + 40, width=panelW - 34,
+            font=ui.FONT_BOLD, fontSize=12, align="center"
+        }):setFillColor(0.62, 0.74, 0.98)
+    else
+        local playerName = mode == "crew" and "YOUR SQUAD" or (player.name or "You")
+        display.newText({
+            parent=popup,
+            text="PLACE " .. tostring(result.place or "?") .. "  |  WINNER " .. tostring(result.winner or "Unknown"),
+            x=CX, y=y, width=panelW - 28,
+            font=ui.FONT_BOLD, fontSize=10, align="center"
+        }):setFillColor(1.0, 0.86, 0.22)
+        y = y + 26
+
+        local shown = 0
+        for r, round in ipairs(result.rounds or {}) do
+            for _, match in ipairs(round) do
+                if match.winner == playerName or match.loser == playerName then
+                    shown = shown + 1
+                    local won = match.winner == playerName
+                    local row = display.newRoundedRect(popup, CX, y, panelW - 28, 34, 6)
+                    row:setFillColor(0.04, 0.10, 0.25, 0.96)
+                    row.strokeWidth = 1
+                    row:setStrokeColor(0.18, 0.48, 0.86, 0.62)
+                    display.newText({
+                        parent=popup,
+                        text="ROUND " .. r .. "  " .. (won and "WIN" or "LOSS"),
+                        x=CX - 110, y=y, font=ui.FONT_BOLD, fontSize=9
+                    }):setFillColor(won and 0.42 or 1.0, won and 1.0 or 0.34, won and 0.62 or 0.34)
+                    display.newText({
+                        parent=popup,
+                        text=tostring(match.winner) .. " def. " .. tostring(match.loser),
+                        x=CX + 36, y=y, width=panelW - 160,
+                        font=ui.FONT_BOLD, fontSize=8, align="left"
+                    }):setFillColor(0.88, 0.94, 1.0)
+                    y = y + 40
+                end
+            end
+        end
+
+        if shown == 0 then
+            display.newText({
+                parent=popup, text="No personal fights were found in this result.",
+                x=CX, y=y + 24, width=panelW - 34,
+                font=ui.FONT_BOLD, fontSize=11, align="center"
+            }):setFillColor(0.62, 0.74, 0.98)
+        end
+    end
+
+    makeNavButton(popup, CX, CY + panelH * 0.5 - 30, "CLOSE", function()
+        ui.popupClose(popup, nil, { popup })
+    end)
+
+    dim:addEventListener("tap", function()
+        ui.popupClose(popup, nil, { popup })
+        return true
+    end)
+    ui.popupOpen(nil, { popup })
+end
+
+local function showChampionsList()
+    local player = saveUtil.load()
+    local champions = (player.tournaments and player.tournaments.champions) or {}
+
+    local popup = display.newGroup()
+    sceneRoot:insert(popup)
+
+    local dim = display.newRect(popup, CX, CY, SW, SH)
+    dim:setFillColor(0, 0, 0, 0.80)
+
+    local panelW, panelH = SW - 28, SH - 130
+    local panel = display.newRoundedRect(popup, CX, CY, panelW, panelH, 12)
+    panel:setFillColor(0.02, 0.06, 0.16, 0.98)
+    panel.strokeWidth = 2
+    panel:setStrokeColor(0.20, 0.62, 1.0, 0.86)
+
+    local topY = CY - panelH * 0.5 + 34
+    display.newText({
+        parent=popup, text="CHAMPIONS",
+        x=CX, y=topY, font=ui.FONT_BOLD, fontSize=20
+    }):setFillColor(0.38, 0.86, 1.0)
+
+    if #champions == 0 then
+        display.newText({
+            parent=popup, text="No champions recorded yet.",
+            x=CX, y=topY + 80, width=panelW - 34,
+            font=ui.FONT_BOLD, fontSize=12, align="center"
+        }):setFillColor(0.62, 0.74, 0.98)
+    else
+        local cardW, cardH = (panelW - 44) * 0.5, 58
+        local startY = topY + 50
+        for i = 1, math.min(12, #champions) do
+            local c = champions[i]
+            local col = ((i - 1) % 2)
+            local row = math.floor((i - 1) / 2)
+            local x = CX - cardW * 0.5 - 6 + col * (cardW + 12)
+            local y = startY + row * 62
+
+            local card = display.newRoundedRect(popup, x, y, cardW, cardH, 7)
+            card:setFillColor(0.04, 0.10, 0.25, 0.96)
+            card.strokeWidth = 1
+            card:setStrokeColor(0.18, 0.48, 0.86, 0.62)
+
+            local okP, pic = pcall(display.newImageRect, popup, portraitPath(c.visualId), 34, 34)
+            if okP and pic then
+                pic.x, pic.y = x - cardW * 0.5 + 24, y
+            end
+
+            local name = display.newText({
+                parent=popup, text=tostring(c.name or "Champion"),
+                x=x - cardW * 0.5 + 48, y=y - 8, width=cardW - 56,
+                font=ui.FONT_BOLD, fontSize=8, align="left"
+            })
+            name.anchorX = 0
+            name:setFillColor(0.94, 0.98, 1.0)
+
+            local band = display.newText({
+                parent=popup, text=tostring(c.band or ""),
+                x=x - cardW * 0.5 + 48, y=y + 10, width=cardW - 56,
+                font=ui.FONT_BOLD, fontSize=8, align="left"
+            })
+            band.anchorX = 0
+            band:setFillColor(1.0, 0.86, 0.22)
+        end
+    end
+
+    makeNavButton(popup, CX, CY + panelH * 0.5 - 30, "CLOSE", function()
+        ui.popupClose(popup, nil, { popup })
+    end)
+
+    dim:addEventListener("tap", function()
+        ui.popupClose(popup, nil, { popup })
+        return true
+    end)
+    ui.popupOpen(nil, { popup })
+end
+
+local function toggleQueue(mode, live)
+    local player = saveUtil.load()
+    ensureTournamentState(player)
+    local localState = player.tournaments[mode] or { joined=false }
+    local nextJoined = not live.joined
+
+    localState.joined = nextJoined
+    localState.joinedAt = nextJoined and os.time() or nil
+    player.tournaments[mode] = localState
+
+    if nextJoined then
+        processEnrollTask(player, "You enrolled in a tournament.")
+    end
+
+    api.tournaments.setJoined(mode, nextJoined, function(response)
+        if response and response.ok then
+            applyTournamentStatusToPlayer(player, response)
+        else
+            saveUtil.save(player)
+            sync.pushPlayerSnapshot(player)
+        end
+        rebuild()
+    end)
+end
+
+local function buildTournamentTab(group, mode)
+    local player = saveUtil.load()
+    ensureTournamentState(player)
+
+    local modeName = mode == "crew" and "SQUADS" or "SINGLE"
+    local countLabel = mode == "crew" and "SQUADS" or "PLAYERS"
+    local localState = player.tournaments[mode] or { joined=false }
+    local live = getTournamentInfo(mode, localState)
+
+    drawHeaderBanner(group, 92, "TOURNAMENTS", modeName .. " BRACKET", levelBand(player.level or 1))
+
+    local status = (live.joined and "QUEUED" or "NOT JOINED") ..
+        "  " .. countLabel .. " " .. tostring(live.count or 0) .. "/" .. tostring(live.capacity or 64)
+    display.newText({
+        parent=group, text=status,
+        x=CX, y=136, width=SW - 30,
+        font=ui.FONT_BOLD, fontSize=10, align="center"
+    }):setFillColor(live.joined and 0.36 or 0.66, live.joined and 1.0 or 0.72, live.joined and 0.58 or 0.92)
+
+    makeNavButton(group, CX, 166, live.joined and "LEAVE QUEUE" or "JOIN QUEUE", function()
+        toggleQueue(mode, live)
+    end)
+
+    drawBracket(group, player, mode, 258)
+
+    local bottomY = SH - 178
+    makeNavButton(group, CX - 74, bottomY, "RESULTS", function()
+        showResultsList(mode)
+    end)
+    makeNavButton(group, CX + 74, bottomY, "CHAMPIONS", function()
+        showChampionsList()
+    end)
+end
+
 -------------------------------------------------
 -- REBUILD
 -------------------------------------------------
-local function buildSingleTab(group)
-    local player = saveUtil.load()
-    ensureTournamentState(player)
-    local state = player.tournaments.single
-    local live = getTournamentInfo("single", state)
-
-    display.newText({
-        parent=group, text="SINGLE TOURNAMENT",
-        x=CX, y=80, font=ui.FONT_BOLD, fontSize=16
-    }):setFillColor(0.35, 0.85, 1.0)
-
-    display.newText({
-        parent=group,
-        text="64 players enter. The bracket starts as soon as the 64th fighter joins.",
-        x=CX, y=110, width=SW-46, font=ui.FONT_BOLD, fontSize=10, align="center"
-    }):setFillColor(0.50, 0.65, 0.90)
-
-    local panel = display.newRoundedRect(group, CX, 200, SW - 34, 170, 14)
-    panel:setFillColor(0.05, 0.10, 0.24, 0.94)
-    panel.strokeWidth = 2
-    panel:setStrokeColor(0.22, 0.50, 1.0, 0.62)
-
-    display.newText({
-        parent=group, text="PLAYOFF FLOW",
-        x=CX, y=140, font=ui.FONT_BOLD, fontSize=11
-    }):setFillColor(1.0, 0.85, 0.2)
-
-    local rounds = {
-        "ROUND OF 64  -  32 MATCHES",
-        "ROUND OF 32  -  16 MATCHES",
-        "SWEET 16  -  8 MATCHES",
-        "ELITE 8  -  4 MATCHES",
-        "FINAL 4  -  2 MATCHES",
-        "CHAMPIONSHIP  -  1 MATCH",
-    }
-    for i, label in ipairs(rounds) do
-        display.newText({
-            parent=group, text=label,
-            x=CX, y=152 + i * 18, font=ui.FONT_BOLD, fontSize=9, align="center"
-        }):setFillColor(0.75, 0.84, 1.0)
-    end
-
-    local statusY = 308
-    display.newText({
-        parent=group,
-        text=live.joined and "STATUS: QUEUED FOR THE NEXT 64-PLAYER BRACKET" or "STATUS: NOT JOINED",
-        x=CX, y=statusY, width=SW - 46,
-        font=ui.FONT_BOLD, fontSize=10, align="center"
-    }):setFillColor(live.joined and 0.45 or 0.90,
-                    live.joined and 1.0 or 0.42,
-                    live.joined and 0.55 or 0.30)
-
-    display.newText({
-        parent=group,
-        text="PLAYERS JOINED: "..tostring(live.count).."/"..tostring(live.capacity),
-        x=CX, y=statusY + 16, width=SW - 46,
-        font=ui.FONT_BOLD, fontSize=10, align="center"
-    }):setFillColor(0.35, 0.85, 1.0)
-
-    display.newText({
-        parent=group,
-        text="This mode uses your leader only in 1v1 tournament battles.",
-        x=CX, y=statusY + 34, width=SW - 46,
-        font=ui.FONT_BOLD, fontSize=9, align="center"
-    }):setFillColor(0.45, 0.60, 0.85)
-
-    local btnY = statusY + 72
-    local btn = display.newRoundedRect(group, CX, btnY, SW - 70, 44, 12)
-    btn:setFillColor(live.joined and 0.28 or 0.04,
-                     live.joined and 0.08 or 0.18,
-                     live.joined and 0.08 or 0.46, 0.97)
-    btn.strokeWidth = 2
-    btn:setStrokeColor(live.joined and 1.0 or 0.28,
-                       live.joined and 0.24 or 0.68,
-                       live.joined and 0.24 or 1.00, 0.88)
-    display.newText({
-        parent=group, text=live.joined and "LEAVE QUEUE" or "JOIN SINGLE TOURNAMENT",
-        x=CX, y=btnY, font=ui.FONT_BOLD, fontSize=13
-    }):setFillColor(1, 1, 1)
-    btn:addEventListener("tap", function()
-        local p = saveUtil.load()
-        ensureTournamentState(p)
-        p.tournaments.single.joined = not live.joined
-        p.tournaments.single.joinedAt = p.tournaments.single.joined and os.time() or nil
-        showToast(p.tournaments.single.joined and "Joined the single tournament queue." or "Left the single tournament queue.", false)
-        if p.tournaments.single.joined and processEnrollTask(p, "You joined the single tournament queue.") then
-            api.tournaments.setJoined("single", true, function(response)
-                applyTournamentStatusToPlayer(p, response)
-                rebuild()
-            end)
-            return true
-        end
-        saveUtil.save(p)
-        sync.pushPlayerSnapshot(p)
-        api.tournaments.setJoined("single", p.tournaments.single.joined, function(response)
-            applyTournamentResponse(response)
-            rebuild()
-        end)
-        return true
-    end)
-end
-
-local function buildCrewTab(group)
-    local player = saveUtil.load()
-    ensureTournamentState(player)
-    local state  = player.tournaments.crew
-    local live = getTournamentInfo("crew", state)
-    local sq     = player.squad or { conquered={} }
-    local squadSize = 1 + #sq.conquered
-
-    display.newText({
-        parent=group, text="CREW TOURNAMENT",
-        x=CX, y=80, font=ui.FONT_BOLD, fontSize=16
-    }):setFillColor(0.35, 0.85, 1.0)
-
-    display.newText({
-        parent=group,
-        text="64 crews enter. Your leader plus 4 conquered fighters battle in a 5v5 bracket.",
-        x=CX, y=110, width=SW-50, font=ui.FONT_BOLD, fontSize=10, align="center"
-    }):setFillColor(0.50, 0.65, 0.90)
-
-    local panel = display.newRoundedRect(group, CX, 194, SW - 34, 194, 14)
-    panel:setFillColor(0.05, 0.10, 0.24, 0.94)
-    panel.strokeWidth = 2
-    panel:setStrokeColor(0.22, 0.50, 1.0, 0.62)
-
-    local sqY = 140
-    display.newText({ parent=group, text="YOUR CREW  ("..squadSize.."/5)",
-        x=CX, y=sqY, font=ui.FONT_BOLD, fontSize=11
-    }):setFillColor(1.0, 0.85, 0.2)
-
-    local members = { player.name or "You" }
-    for _, c in ipairs(sq.conquered) do table.insert(members, c.name) end
-    while #members < 5 do table.insert(members, "EMPTY") end
-
-    for i, name in ipairs(members) do
-        local isReal = i <= squadSize
-        display.newText({
-            parent=group, text=name,
-            x=CX, y=sqY + i*18, font=ui.FONT_BOLD, fontSize=10, align="center"
-        }):setFillColor(isReal and 0.4 or 0.35,
-                        isReal and 1.0 or 0.55,
-                        isReal and 0.6 or 0.60)
-    end
-
-    local flowY = sqY + 118
-    display.newText({ parent=group, text="BRACKET FLOW",
-        x=CX, y=flowY, font=ui.FONT_BOLD, fontSize=10
-    }):setFillColor(1.0, 0.85, 0.2)
-    local flow = { "64 CREWS", "32 CREWS", "16 CREWS", "8 CREWS", "FINAL 4", "CHAMPIONSHIP" }
-    for i, label in ipairs(flow) do
-        display.newText({
-            parent=group, text=label,
-            x=CX, y=flowY + i * 14, font=ui.FONT_BOLD, fontSize=8, align="center"
-        }):setFillColor(0.75, 0.84, 1.0)
-    end
-
-    local statusY = 342
-    display.newText({
-        parent=group,
-        text=live.joined and "STATUS: CREW QUEUED FOR THE NEXT 64-CREW BRACKET" or "STATUS: NOT JOINED",
-        x=CX, y=statusY, width=SW - 46,
-        font=ui.FONT_BOLD, fontSize=10, align="center"
-    }):setFillColor(live.joined and 0.45 or 0.90,
-                    live.joined and 1.0 or 0.42,
-                    live.joined and 0.55 or 0.30)
-
-    display.newText({
-        parent=group,
-        text="CREWS JOINED: "..tostring(live.count).."/"..tostring(live.capacity),
-        x=CX, y=statusY + 16, width=SW - 46,
-        font=ui.FONT_BOLD, fontSize=10, align="center"
-    }):setFillColor(0.35, 0.85, 1.0)
-
-    local btnY = statusY + 52
-    local btn  = display.newRoundedRect(group, CX, btnY, SW - 70, 44, 12)
-    btn:setFillColor(live.joined and 0.28 or 0.04,
-                     live.joined and 0.08 or 0.18,
-                     live.joined and 0.08 or 0.46, 0.97)
-    btn.strokeWidth = 2
-    btn:setStrokeColor(live.joined and 1.0 or 0.28,
-                       live.joined and 0.24 or 0.68,
-                       live.joined and 0.24 or 1.00, 0.88)
-    display.newText({ parent=group, text=live.joined and "LEAVE CREW QUEUE" or "JOIN CREW TOURNAMENT",
-        x=CX, y=btnY, font=ui.FONT_BOLD, fontSize=13
-    }):setFillColor(1, 1, 1)
-    btn:addEventListener("tap", function()
-        local p = saveUtil.load()
-        ensureTournamentState(p)
-        p.tournaments.crew.joined = not live.joined
-        p.tournaments.crew.joinedAt = p.tournaments.crew.joined and os.time() or nil
-        showToast(p.tournaments.crew.joined and "Joined the crew tournament queue." or "Left the crew tournament queue.", false)
-        if p.tournaments.crew.joined and processEnrollTask(p, "You joined the crew tournament queue.") then
-            api.tournaments.setJoined("crew", true, function(response)
-                applyTournamentStatusToPlayer(p, response)
-                rebuild()
-            end)
-            return true
-        end
-        saveUtil.save(p)
-        sync.pushPlayerSnapshot(p)
-        api.tournaments.setJoined("crew", p.tournaments.crew.joined, function(response)
-            applyTournamentResponse(response)
-            rebuild()
-        end)
-        return true
-    end)
-end
 
 rebuild = function()
     if contentGrp then contentGrp:removeSelf(); contentGrp=nil end
@@ -878,7 +1111,7 @@ rebuild = function()
 
     -- tab bar
     local tabY = 32
-    local tabs = { {key="single",label="SINGLE"}, {key="crew",label="CREW"} }
+    local tabs = { {key="single",label="SINGLE"}, {key="crew",label="SQUADS"} }
     local tabW = (SW - 30) / #tabs
 
     for i, t in ipairs(tabs) do
@@ -908,11 +1141,7 @@ rebuild = function()
     local inner = display.newGroup()
     contentGrp:insert(inner)
 
-    if activeTab == "single" then
-        buildSingleTab(inner)
-    else
-        buildCrewTab(inner)
-    end
+    buildTournamentTab(inner, activeTab)
 end
 
 -------------------------------------------------

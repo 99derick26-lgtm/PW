@@ -388,6 +388,28 @@ local function isGuildWarBattle()
     return activeGuildWarBattle() ~= nil
 end
 
+local function activeGuildLeagueChallenge()
+    local challenge = composer.getVariable("guildLeagueChallenge")
+    if not challenge then return nil end
+    if composer.getVariable("battleMode") ~= "guild_league_challenge" then
+        composer.setVariable("guildLeagueChallenge", nil)
+        return nil
+    end
+    return challenge
+end
+
+local function isGuildLeagueChallenge()
+    return activeGuildLeagueChallenge() ~= nil
+end
+
+local function withoutCallFriend(list)
+    local out = {}
+    for _, id in ipairs(list or {}) do
+        if id ~= "call_a_friend" then out[#out + 1] = id end
+    end
+    return out
+end
+
 local function reportRemoteFight(result)
     if not result or composer.getVariable("battleMode") == "arena_replay" then return end
     if not opponent then return end
@@ -1299,10 +1321,13 @@ end
 applyRewards = function(result)
     local replayFight = (composer.getVariable("battleMode") == "arena_replay") and composer.getVariable("fightAllReplay") or nil
     local isConquest  = opponent and opponent.isConquest
+    local isRebel     = opponent and opponent.isRebel
     local guildLootChallenge = isGuildLootBattle() and composer.getVariable("guildLootChallenge") or nil
     local guildWarBattle = activeGuildWarBattle()
+    local guildLeagueChallenge = activeGuildLeagueChallenge()
     local gainedGold = 0
     local gainedXp   = 2
+    local conquestServerHandled = false
 
     if guildWarBattle then
         local rg = display.newGroup()
@@ -1349,7 +1374,60 @@ applyRewards = function(result)
         return
     end
 
-    if result.winner=="player" and not replayFight and not guildLootChallenge then
+    if guildLeagueChallenge then
+        local rg = display.newGroup()
+        battleRoot:insert(rg)
+        local won = result.winner == "player"
+        local dim = display.newRect(rg, display.contentCenterX, display.contentCenterY, display.actualContentWidth, display.actualContentHeight)
+        dim:setFillColor(0, 0, 0, 0.58)
+        dim.isHitTestable = true
+        local panel = display.newRoundedRect(rg, display.contentCenterX, display.contentCenterY, display.actualContentWidth - 42, 188, 10)
+        panel:setFillColor(0.02, 0.06, 0.14, 0.98)
+        panel.strokeWidth = 2
+        panel:setStrokeColor(won and 0.22 or 1.0, won and 0.90 or 0.30, won and 0.42 or 0.28, 0.80)
+        display.newText({
+            parent=rg,
+            text=won and "SLOT CLAIMED" or "CHALLENGE LOST",
+            x=display.contentCenterX,
+            y=display.contentCenterY - 48,
+            font=ui.FONT_BOLD,
+            fontSize=20,
+            align="center",
+        }):setFillColor(won and 0.36 or 1.0, won and 1.0 or 0.38, won and 0.48 or 0.34)
+        display.newText({
+            parent=rg,
+            text=won and "You replaced the league slot holder." or "The slot holder keeps their spot.",
+            x=display.contentCenterX,
+            y=display.contentCenterY - 14,
+            width=display.actualContentWidth - 70,
+            font=ui.FONT_BOLD,
+            fontSize=11,
+            align="center",
+        }):setFillColor(0.70, 0.84, 1.0)
+        local contBtn = display.newRoundedRect(rg, display.contentCenterX, display.contentCenterY + 48, 150, 38, 8)
+        contBtn:setFillColor(0.06, 0.18, 0.45, 0.97)
+        contBtn.strokeWidth = 1.5
+        contBtn:setStrokeColor(0.3, 0.65, 1.0, 0.8)
+        display.newText({ parent=rg, text="CONTINUE", x=contBtn.x, y=contBtn.y, font=ui.FONT_BOLD, fontSize=14 }):setFillColor(1,1,1)
+        contBtn:addEventListener("tap", function()
+            api.guilds.reportLeagueChallenge(guildLeagueChallenge.guildId, guildLeagueChallenge.slot, { won=won }, function(response)
+                if response and response.ok and response.data and response.data.player then
+                    sync.applyPlayerSnapshot(response.data.player, saveUtil.activeSlot)
+                end
+                composer.setVariable("opponent", nil)
+                composer.setVariable("guildLeagueChallenge", nil)
+                composer.setVariable("battleMode", nil)
+                composer.gotoScene("scenes.guild_league", {
+                    effect="slideRight", time=260,
+                    params={ guildId=guildLeagueChallenge.guildId, guildKey=guildLeagueChallenge.guildKey },
+                })
+            end)
+            return true
+        end)
+        return
+    end
+
+    if result.winner=="player" and not replayFight and not guildLootChallenge and not isRebel then
         local reward = xpUtil.getArenaReward(opponent and opponent.difficulty or composer.getVariable("arenaDifficulty") or "casual")
         gainedGold = reward.gold
         gainedXp   = reward.xp
@@ -1358,7 +1436,7 @@ applyRewards = function(result)
         composer.setVariable("arenaDefeated", opponent.name)
     end
 
-    if not isConquest and not guildLootChallenge then
+    if not isConquest and not isRebel and not guildLootChallenge then
         saveUtil.recordArenaFight(player, result.winner == "player")
     end
 
@@ -1400,6 +1478,7 @@ applyRewards = function(result)
 
     local guildLootReport = nil
     local guildLootReporting = false
+    local specialReporting = false
     local function submitGuildLootResult(callback)
         if not guildLootChallenge or replayFight then
             if callback then callback() end
@@ -1422,6 +1501,45 @@ applyRewards = function(result)
         end)
     end
 
+    local function submitSpecialResult(callback)
+        if replayFight or specialReporting then
+            if callback then callback() end
+            return
+        end
+        specialReporting = true
+
+        if isRebel then
+            api.squad.rebel({ won = result.winner == "player" }, function(response)
+                if response and response.ok and response.data and response.data.player then
+                    player = sync.applyPlayerSnapshot(response.data.player, saveUtil.activeSlot)
+                    if result.winner == "player" then
+                        player.rival = nil
+                        saveUtil.save(player, saveUtil.activeSlot)
+                    end
+                end
+                if callback then callback(response) end
+            end)
+            return
+        end
+
+        if isConquest and result.winner == "player" and opponent and opponent.conquestTarget and opponent.conquestTarget.playerId then
+            api.squad.recruit({
+                target = opponent.conquestTarget,
+                targetPlayerId = opponent.conquestTarget.playerId,
+                defeatedRivalPlayerId = opponent.conquestRivalPlayerId,
+            }, function(response)
+                if response and response.ok and response.data and response.data.player then
+                    conquestServerHandled = true
+                    player = sync.applyPlayerSnapshot(response.data.player, saveUtil.activeSlot)
+                end
+                if callback then callback(response) end
+            end)
+            return
+        end
+
+        if callback then callback() end
+    end
+
     local function showResultPanel()
         local rg  = display.newGroup()
         battleRoot:insert(rg)
@@ -1438,7 +1556,7 @@ applyRewards = function(result)
         panel:setStrokeColor(won and 0.2 or 0.8, won and 0.85 or 0.2, won and 0.3 or 0.2, 0.9)
 
         local rt = display.newText({ parent=rg,
-            text=won and "VICTORY" or "DEFEAT",
+            text=isRebel and (won and "FREED" or "STILL CONQUERED") or (won and "VICTORY" or "DEFEAT"),
             x=CX, y=CY-75, font=ui.FONT_BOLD, fontSize=30 })
         rt:setFillColor(won and 0.3 or 1.0, won and 1.0 or 0.3, won and 0.5 or 0.3)
 
@@ -1446,7 +1564,7 @@ applyRewards = function(result)
             x=CX, y=CY-48, font=ui.FONT_BOLD, fontSize=13
         }):setFillColor(0.7,0.8,1.0)
 
-        if won then
+        if won and not isRebel then
             display.newText({ parent=rg,
                 text="+"..gainedGold.."g   +"..gainedXp.." XP",
                 x=CX, y=CY-22, font=ui.FONT_BOLD, fontSize=16
@@ -1477,7 +1595,7 @@ applyRewards = function(result)
         }):setFillColor(1,1,1)
         contBtn:addEventListener("tap", function()
             local function leaveBattle()
-                if isConquest and not replayFight then
+                if isConquest and not replayFight and not conquestServerHandled then
                     composer.setVariable("conquestResult", {
                         won    = (result.winner == "player"),
                         target = opponent and opponent.conquestTarget or nil,
@@ -1498,7 +1616,7 @@ applyRewards = function(result)
                 local returnScene = "scenes.arena"
                 if guildLootChallenge and not replayFight then
                     returnScene = "scenes.guild_view"
-                elseif isConquest and not replayFight then
+                elseif (isConquest or isRebel) and not replayFight then
                     returnScene = "scenes.squad"
                 end
                 local params = nil
@@ -1513,11 +1631,13 @@ applyRewards = function(result)
 
             local function continueAfterChests()
                 submitGuildLootResult(function()
-                    if levelSummary then
-                        levelUpPopup.show(levelSummary, leaveBattle)
-                    else
-                        leaveBattle()
-                    end
+                    submitSpecialResult(function()
+                        if levelSummary then
+                            levelUpPopup.show(levelSummary, leaveBattle)
+                        else
+                            leaveBattle()
+                        end
+                    end)
                 end)
             end
 
@@ -1796,7 +1916,16 @@ local function buildBattle(sceneGroup)
     if battleBorder and battleBorder.toFront then battleBorder:toFront() end
     updateHpBars()
 
-    local function petSlot(team, index)
+    local function petSpreadMultiplier(def)
+        local tier = def and def.size or "medium"
+        if tier == "small" then return 0.78 end
+        if tier == "medium" then return 1.0 end
+        if tier == "large" then return 1.22 end
+        if tier == "massive" then return 1.38 end
+        return 1.0
+    end
+
+    local function petSlot(team, index, def)
         local formation = FORMATION[team]
         local slots = formation.petOffsets
         local slot = slots[((index - 1) % #slots) + 1]
@@ -1804,14 +1933,21 @@ local function buildBattle(sceneGroup)
         local row = slot.row == "back" and "back" or "front"
         local yRef = row == "back" and formation.backPetsY or formation.frontPetsY
         local scale = row == "back" and formation.rearScale or formation.frontScale
-        local spread = team == "enemy" and 48 or 72
+        local petW = select(1, petDisplayDimensions(def, scale))
+        local distance = petSpreadMultiplier(def)
+        local xRef = slot.x
+        if xRef ~= 0 then
+            local side = xRef < 0 and -1 or 1
+            xRef = side * (math.abs(xRef) * distance + math.max(0, petW - 92) * 0.34)
+        end
+        local spread = (team == "enemy" and 48 or 72) * distance
         if wave > 0 then
             spread = spread * wave * (index % 2 == 0 and 1 or -1)
         else
             spread = 0
         end
         return {
-            x = formationX(slot.x + spread),
+            x = formationX(xRef + spread),
             y = formationY(yRef),
             scale = scale,
         }
@@ -1820,12 +1956,12 @@ local function buildBattle(sceneGroup)
     -- PLAYER PETS
     player.equipped = player.equipped or {}
     player.equipped.pets = player.equipped.pets or {}
-    local activePlayerPets = playerPetRefsFor(isGuildWarBattle() and {} or spells.getEquippedPetsForBattle(player))
+    local activePlayerPets = playerPetRefsFor((isGuildWarBattle() or isGuildLeagueChallenge()) and {} or spells.getEquippedPetsForBattle(player))
     for i, petRef in ipairs(activePlayerPets) do
         local petId = canonicalPetId(petRef)
         local def = petsDB[petId]
         if def then
-            local slot = petSlot("player", i)
+            local slot = petSlot("player", i, def)
             local petW, petH = petDisplayDimensions(def, slot.scale)
             slot.x = clampFormationX(slot.x, petW)
             local path = petAssets.battle(petId, "player")
@@ -1851,11 +1987,11 @@ local function buildBattle(sceneGroup)
     -- opponent.pets is an array of petId strings e.g. {"cheetah","dog"}
     -- Sprites loaded from: assets/sprites/pets/{petId}/battle.png
     local enemyPetRefs = collectEnemyPetRefs()
-    for i, petRef in ipairs((isGuildLootBattle() or isGuildWarBattle()) and {} or enemyPetRefs) do
+    for i, petRef in ipairs((isGuildLootBattle() or isGuildWarBattle() or isGuildLeagueChallenge()) and {} or enemyPetRefs) do
         local petId = canonicalPetId(petRef)
         local def = petsDB[petId]
         if def then
-            local slot = petSlot("enemy", i)
+            local slot = petSlot("enemy", i, def)
             local petW, petH = petDisplayDimensions(def, slot.scale)
             slot.x = clampFormationX(slot.x, petW)
             local path = petAssets.battle(petId, "enemy")
@@ -1906,6 +2042,8 @@ end
 -------------------------------------------------
 local function resolveBattle()
     local guildWarBattle = activeGuildWarBattle()
+    local guildLeagueChallenge = activeGuildLeagueChallenge()
+    local leagueChallenge = guildLeagueChallenge ~= nil
     local finalStats = guildWarBattle and {
         attack = player.attack or 100,
         defense = player.defense or 100,
@@ -1914,7 +2052,7 @@ local function resolveBattle()
     } or statsUtil.calculate(player)
 
     local playerPetStats = {}
-    local activePlayerPets = playerPetRefsFor(guildWarBattle and {} or spells.getEquippedPetsForBattle(player))
+    local activePlayerPets = playerPetRefsFor((guildWarBattle or leagueChallenge) and {} or spells.getEquippedPetsForBattle(player))
     for _, petRef in ipairs(activePlayerPets) do
         local petId = canonicalPetId(petRef)
         playerPetStats[petId] = petScaler.scalePet(petId, finalStats, petScaler.getAugments(player, petId))
@@ -1927,7 +2065,7 @@ local function resolveBattle()
         defense            = finalStats.defense,
         speed              = finalStats.speed,
         hp                 = finalStats.hp,
-        spells             = player.spells,
+        spells             = leagueChallenge and withoutCallFriend(player.spells) or player.spells,
         pets               = activePlayerPets,
         petStats           = playerPetStats,
         equipped           = player.equipped,
@@ -1957,7 +2095,7 @@ local function resolveBattle()
 
     local enemyPetStats = {}
     local primaryEnemyPets = enemyPetRefsFor(opponent, 1)
-    if isGuildLootBattle() or guildWarBattle then primaryEnemyPets = {} end
+    if isGuildLootBattle() or guildWarBattle or leagueChallenge then primaryEnemyPets = {} end
     for _, petRef in ipairs(primaryEnemyPets) do
         local petId = canonicalPetId(petRef)
         enemyPetStats[petId] = petScaler.scalePet(petId, opponent)
@@ -1966,7 +2104,7 @@ local function resolveBattle()
     local defenderEnemies = {}
     for i, defender in ipairs(opponent.defenders or {}) do
         local defenderPets = enemyPetRefsFor(defender, i + 1)
-        if isGuildLootBattle() or guildWarBattle then defenderPets = {} end
+        if isGuildLootBattle() or guildWarBattle or leagueChallenge then defenderPets = {} end
         local defenderPetStats = {}
         for _, petRef in ipairs(defenderPets) do
             local petId = canonicalPetId(petRef)
@@ -1997,7 +2135,7 @@ local function resolveBattle()
         defense  = opponent.defense,
         speed    = opponent.speed,
         hp       = opponent.hp,
-        spells   = opponent.spells or {},
+        spells   = leagueChallenge and withoutCallFriend(opponent.spells) or (opponent.spells or {}),
         pets     = primaryEnemyPets,
         petStats = enemyPetStats,
         equipped = opponent.equipped,

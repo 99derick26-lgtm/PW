@@ -8,6 +8,7 @@ local BATTLE_KEYS = {
     "fightAllReplay",
     "guildLootChallenge",
     "guildWarBattle",
+    "guildLeagueChallenge",
 }
 
 function M.clear()
@@ -37,6 +38,13 @@ function M.startGuildWar(opponent, war)
     composer.setVariable("battleMode", "guild_war")
     composer.setVariable("opponent", opponent)
     composer.setVariable("guildWarBattle", war)
+end
+
+function M.startGuildLeagueChallenge(opponent, challenge)
+    M.clear()
+    composer.setVariable("battleMode", "guild_league_challenge")
+    composer.setVariable("opponent", opponent)
+    composer.setVariable("guildLeagueChallenge", challenge)
 end
 
 function M.mode()

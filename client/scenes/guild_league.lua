@@ -1,399 +1,426 @@
--- scenes/guild_league.lua
--- 8-member single-elimination bracket  |  tap a matchup to simulate the fight
+local composer = require("composer")
+local scene = composer.newScene()
 
-local composer  = require("composer")
-local scene     = composer.newScene()
-local saveUtil  = require("utils.save")
-local combat    = require("utils.combat")
-local ui        = require("utils.ui")
-local guildNav  = require("utils.guild_nav")
+local api = require("utils.api")
+local battleContext = require("utils.battle_context")
+local guildContext = require("utils.guild_context")
+local guildNav = require("utils.guild_nav")
+local saveUtil = require("utils.save")
+local shell = require("utils.guild_scene_shell")
+local sync = require("utils.sync")
+local ui = require("utils.ui")
 
 local SW = display.contentWidth
 local SH = display.contentHeight
 local CX = display.contentCenterX
 local CY = display.contentCenterY
-local BOTTOM_H   = guildNav.HEIGHT
-local BOTTOM_Y   = guildNav.bottomY()
-local HEADER_H   = 64
-local HEADER_Y   = HEADER_H * 0.5
-local CONTENT_TOP = HEADER_H + 2
+local CONTENT_TOP = 78
 local CONTENT_BOT = guildNav.contentBottom()
-local CONTENT_H   = CONTENT_BOT - CONTENT_TOP
+local CONTENT_H = CONTENT_BOT - CONTENT_TOP
 
-local FRAME_LARGE  = "assets/sprites/ui/frames/border_large.png"
-local FRAME_SMALL  = "assets/sprites/ui/frames/border_small.png"
-local FRAME_THIN_L = "assets/sprites/ui/frames/thin_large.png"
-local FRAME_THIN_S = "assets/sprites/ui/frames/thin_small.png"
+local contentGroup
+local chromeGroup
+local popup
+local activeGuild
 
-local function drawFrame(parent, x, y, w, h, path)
-    local ok, img = pcall(display.newImageRect, parent, path, w, h)
-    if ok and img then img.x=x; img.y=y; return img end
-    local r = display.newRoundedRect(parent, x, y, w, h, 8)
-    r:setFillColor(0.03,0.08,0.20,0.95)
-    r.strokeWidth=1.5; r:setStrokeColor(0.18,0.65,0.42,0.70)
-    return r
+local STAT_ICONS = {
+    attack = "assets/sprites/ui/icons/atk.png",
+    defense = "assets/sprites/ui/icons/def.png",
+    speed = "assets/sprites/ui/icons/spd.png",
+    hp = "assets/sprites/ui/icons/hp.png",
+}
+
+local SLOT_POSITIONS = {
+    [1] = { x=-76, y=38, w=60, h=60 },
+    [2] = { x=76, y=38, w=60, h=60 },
+    [3] = { x=0, y=130, w=60, h=60, leader=true },
+    [4] = { x=-76, y=220, w=60, h=60 },
+    [5] = { x=76, y=220, w=60, h=60 },
+}
+
+local GUILD_NAMES = {
+    "Pinche Perros", "Neon Riot", "Grid Saints", "Iron Circuit",
+    "Ghost Syndicate", "Street Wolves", "Cyber Saints", "Null Crew",
+    "Rooftop Kings", "Market Crash", "Blue Phones", "Chrome Dogs",
+    "Scrap Lords", "Toxic Angels", "Night Ops", "Jailbreak",
+    "Pixel Punx", "Gold Teeth", "Coil Runners", "Void Union",
+    "Hard Reset", "Redline", "Metro Saints", "Signal Zero",
+    "Low Battery", "Arena Rats", "Vault Boys", "Static Bloom",
+    "Byte Club", "Crash Cart", "Chrome Mercy", "Final Packet",
+}
+
+local function closePopup()
+    if popup and popup.removeSelf then popup:removeSelf() end
+    popup = nil
 end
 
-local BOTTOM_TABS = {
-    { label="HOME",   scene="scenes.guild_home"   },
-    { label="LEAGUE", scene="scenes.guild_league" },
-    { label="WAR",    scene="scenes.guild_war"    },
-    { label="LOOT",   scene="scenes.guild_loot"   },
-}
+local function clearContent()
+    closePopup()
+    if contentGroup and contentGroup.removeSelf then contentGroup:removeSelf() end
+    contentGroup = nil
+end
 
--------------------------------------------------
--- BRACKET DATA
--- 8 participants — index 1 is always the player's guild member
--------------------------------------------------
-local PARTICIPANTS = {
-    { name="Chango",   level=14, atk=28, def=20, spd=18, hp=140, isPlayer=true  },
-    { name="RavenX",   level=11, atk=22, def=16, spd=22, hp=110, isPlayer=false },
-    { name="NullByte", level=9,  atk=18, def=14, spd=14, hp=90,  isPlayer=false },
-    { name="Glitch77", level=7,  atk=14, def=12, spd=16, hp=70,  isPlayer=false },
-    { name="IronClad", level=6,  atk=12, def=18, spd=10, hp=80,  isPlayer=false },
-    { name="Vex",      level=8,  atk=16, def=10, spd=20, hp=80,  isPlayer=false },
-    { name="Sable",    level=10, atk=20, def=12, spd=18, hp=100, isPlayer=false },
-    { name="Bolt",     level=12, atk=24, def=14, spd=16, hp=120, isPlayer=false },
-}
+local function playerId()
+    local player = saveUtil.load()
+    return player and player.playerId
+end
 
--- bracket state: rounds[round][matchIdx] = { p1=idx, p2=idx, winner=idx|nil }
--- round 1: 4 matches (QF), round 2: 2 matches (SF), round 3: 1 match (Final)
-local bracketState = nil
-local resultPopup  = nil
+local function applyGuildResponse(response)
+    if not response or not response.ok or not response.data then return false end
+    if response.data.player then
+        sync.applyPlayerSnapshot(response.data.player, saveUtil.activeSlot)
+    end
+    if response.data.guild then
+        activeGuild = response.data.guild
+    end
+    return true
+end
 
-local function initBracket()
-    -- shuffle participants for seeding
-    local seeded = {}
-    for i=1,#PARTICIPANTS do seeded[i]=i end
-    -- keep player at seed 1
-    bracketState = {
-        [1] = {
-            { p1=1, p2=8, winner=nil },
-            { p1=2, p2=7, winner=nil },
-            { p1=3, p2=6, winner=nil },
-            { p1=4, p2=5, winner=nil },
-        },
-        [2] = {
-            { p1=nil, p2=nil, winner=nil },
-            { p1=nil, p2=nil, winner=nil },
-        },
-        [3] = {
-            { p1=nil, p2=nil, winner=nil },
-        },
+local function statValue(holder, key)
+    return tonumber(holder and holder[key]) or 100
+end
+
+local function drawStat(parent, x, y, key, value)
+    local ok, icon = pcall(display.newImageRect, parent, STAT_ICONS[key], 18, 18)
+    if ok and icon then
+        icon.x = x
+        icon.y = y
+    end
+    display.newText({
+        parent=parent, text=tostring(value),
+        x=x + 24, y=y, width=42,
+        font=ui.FONT_BOLD, fontSize=9, align="left",
+    }):setFillColor(0.78,0.90,1.0)
+end
+
+local function makeNavButton(parent, x, y, w, h, label, onTap)
+    local ok, img = pcall(display.newImageRect, parent, "assets/sprites/ui/btn_nav.png", w, h)
+    local btn = ok and img or display.newRoundedRect(parent, x, y, w, h, 8)
+    btn.x = x
+    btn.y = y
+    if not ok then
+        btn:setFillColor(0.04,0.14,0.32,0.96)
+        btn.strokeWidth = 1.5
+        btn:setStrokeColor(0.26,0.70,1.0,0.78)
+    end
+    local t = display.newText({
+        parent=parent, text=label,
+        x=x, y=y, width=w - 14,
+        font=ui.FONT_BOLD, fontSize=10, align="center",
+    })
+    t:setFillColor(0.84,0.96,1.0)
+    btn:addEventListener("tap", onTap)
+    t:addEventListener("tap", onTap)
+    return btn
+end
+
+local function bracketPopup()
+    closePopup()
+    popup = display.newGroup()
+    scene.view:insert(popup)
+
+    local dim = display.newRect(popup, CX, CY, SW, SH)
+    dim:setFillColor(0,0,0,0.78)
+    dim.isHitTestable = true
+    dim:addEventListener("tap", function() closePopup(); return true end)
+
+    local panelW, panelH = SW - 18, CONTENT_H - 18
+    local panel = display.newRoundedRect(popup, CX, CONTENT_TOP + panelH * 0.5, panelW, panelH, 10)
+    panel:setFillColor(0.02,0.04,0.11,0.98)
+    panel.strokeWidth = 1.5
+    panel:setStrokeColor(0.22,0.58,1.0,0.62)
+    panel:addEventListener("tap", function() return true end)
+
+    display.newText({
+        parent=popup, text="GUILD LEAGUE",
+        x=CX, y=CONTENT_TOP + 18,
+        font=ui.FONT_BOLD, fontSize=14,
+    }):setFillColor(0.42,1.0,0.70)
+
+    local labels = { "32", "16", "8", "4", "FINAL" }
+    local colW = (panelW - 16) / 5
+    local top = CONTENT_TOP + 48
+    for r = 1, 5 do
+        local x = CX - panelW * 0.5 + 8 + (r - 0.5) * colW
+        display.newText({
+            parent=popup, text=labels[r],
+            x=x, y=top - 14, width=colW - 4,
+            font=ui.FONT_BOLD, fontSize=7, align="center",
+        }):setFillColor(0.46,0.74,1.0)
+
+        local rows = r == 1 and 16 or math.max(1, math.floor(16 / (2 ^ (r - 1))))
+        local rowH = math.min(30, (panelH - 80) / rows)
+        for i = 1, rows do
+            local y = top + (i - 1) * rowH + rowH * 0.5
+            local bg = display.newRoundedRect(popup, x, y, colW - 5, rowH - 4, 5)
+            bg:setFillColor(0.025,0.07,0.16,0.94)
+            bg.strokeWidth = 1
+            bg:setStrokeColor(0.12,0.42,0.82,0.50)
+            local name = r == 1 and (i == 1 and ((activeGuild and activeGuild.name) or "Your Guild") or GUILD_NAMES[i]) or "TBD"
+            display.newText({
+                parent=popup, text=name,
+                x=x, y=y, width=colW - 10,
+                font=ui.FONT_BOLD, fontSize=6, align="center",
+            }):setFillColor(i == 1 and r == 1 and 0.46 or 0.72, i == 1 and r == 1 and 1.0 or 0.82, 1.0)
+        end
+    end
+end
+
+local function startChallenge(slot)
+    local holder = slot and slot.holder
+    if not holder or not activeGuild or not activeGuild.guildId then return true end
+    local opponent = {
+        id="enemy:leader",
+        name=holder.name or "League Holder",
+        displayName=holder.name,
+        level=holder.level or 1,
+        attack=holder.attack or 100,
+        defense=holder.defense or 100,
+        speed=holder.speed or 100,
+        hp=holder.hp or 100,
+        visualId=holder.skinId,
+        pets={},
+        spells={},
+        equipped={},
     }
+    battleContext.startGuildLeagueChallenge(opponent, {
+        guildId=activeGuild.guildId,
+        guildKey=composer.getVariable("guildContextKind"),
+        slot=slot.slot,
+    })
+    composer.gotoScene("scenes.arena_battle", { effect="slideLeft", time=220 })
+    return true
 end
 
--------------------------------------------------
--- SIMULATE A FIGHT
--------------------------------------------------
-local function simulateFight(pIdx, oIdx)
-    local p = PARTICIPANTS[pIdx]
-    local o = PARTICIPANTS[oIdx]
+local function showSlotPopup(slot)
+    local holder = slot and slot.holder
+    if not holder then return true end
+    closePopup()
+    popup = display.newGroup()
+    scene.view:insert(popup)
 
-    local pEnt = { id="p1", level=p.level, attack=p.atk, defense=p.def, speed=p.spd, hp=p.hp, pets={}, petStats={} }
-    local oEnt = { id="p2", level=o.level, attack=o.atk, defense=o.def, speed=o.spd, hp=o.hp, pets={}, petStats={} }
+    local dim = display.newRect(popup, CX, CY, SW, SH)
+    dim:setFillColor(0,0,0,0.74)
+    dim.isHitTestable = true
+    dim:addEventListener("tap", function() closePopup(); return true end)
 
-    -- simple simulation without combat.lua to avoid dependency issues
-    math.randomseed(os.time())
-    local pHp, oHp = p.hp, o.hp
-    local turn = p.spd >= o.spd and "p" or "o"
+    local panelW, panelH = SW - 54, 304
+    local panel = display.newRoundedRect(popup, CX, CY, panelW, panelH, 10)
+    panel:setFillColor(0.025,0.065,0.16,0.98)
+    panel.strokeWidth = 2
+    panel:setStrokeColor(slot.locked and 1.0 or 0.25, slot.locked and 0.78 or 0.75, slot.locked and 0.18 or 1.0, 0.78)
+    panel:addEventListener("tap", function() return true end)
 
-    for _ = 1, 30 do
-        if pHp <= 0 or oHp <= 0 then break end
-        if turn == "p" then
-            local dmg = math.max(1, math.floor(p.atk - o.def*0.5 + math.random(-3,3)))
-            oHp = oHp - dmg; turn = "o"
-        else
-            local dmg = math.max(1, math.floor(o.atk - p.def*0.5 + math.random(-3,3)))
-            pHp = pHp - dmg; turn = "p"
-        end
+    shell.drawPortrait(popup, CX, CY - 94, holder.name, holder.skinId, 70)
+    display.newText({
+        parent=popup,
+        text="LV " .. tostring(holder.level or 1) .. "  " .. tostring(holder.name or "Player"),
+        x=CX, y=CY - 42, width=panelW - 26,
+        font=ui.FONT_BOLD, fontSize=12, align="center",
+    }):setFillColor(0.84,0.94,1.0)
+
+    local statY = CY + 4
+    drawStat(popup, CX - 86, statY - 16, "attack", statValue(holder, "attack"))
+    drawStat(popup, CX + 20, statY - 16, "defense", statValue(holder, "defense"))
+    drawStat(popup, CX - 86, statY + 20, "speed", statValue(holder, "speed"))
+    drawStat(popup, CX + 20, statY + 20, "hp", statValue(holder, "hp"))
+
+    local myId = playerId()
+    local label = "CHALLENGE"
+    local enabled = true
+    if slot.locked then
+        label = "LEADER LOCKED"
+        enabled = false
+    elseif holder.playerId == myId then
+        label = "HOLDING SLOT"
+        enabled = false
     end
-
-    return pHp > oHp and pIdx or oIdx, pHp, oHp
-end
-
--------------------------------------------------
--- ADVANCE BRACKET
--------------------------------------------------
-local function advanceBracket(round, matchIdx, winnerIdx)
-    bracketState[round][matchIdx].winner = winnerIdx
-
-    if round == 1 then
-        local slot = math.ceil(matchIdx / 2)
-        local pos  = matchIdx % 2 == 1 and "p1" or "p2"
-        if not bracketState[2][slot] then bracketState[2][slot]={p1=nil,p2=nil,winner=nil} end
-        bracketState[2][slot][pos] = winnerIdx
-    elseif round == 2 then
-        local pos = matchIdx == 1 and "p1" or "p2"
-        bracketState[3][1][pos] = winnerIdx
-    end
-end
-
--------------------------------------------------
--- RESULT POPUP
--------------------------------------------------
-local function closeResult()
-    if resultPopup and resultPopup.removeSelf then resultPopup:removeSelf() end
-    resultPopup = nil
-end
-
-local function showResult(sg, p1Idx, p2Idx, winnerIdx, p1Hp, p2Hp, onClose)
-    closeResult()
-    resultPopup = display.newGroup()
-    sg:insert(resultPopup)
-
-    local dim=display.newRect(resultPopup, CX, CY, SW, SH)
-    dim:setFillColor(0,0,0,0.80); dim.isHitTestable=true
-
-    local pw=SW-30; local ph=210
-    local panel=display.newRoundedRect(resultPopup, CX, CY, pw, ph, 14)
-    panel:setFillColor(0.03,0.08,0.20,0.98)
-    panel.strokeWidth=2; panel:setStrokeColor(0.25,0.65,1.0,0.70)
-
-    display.newText({ parent=resultPopup, text="FIGHT RESULT",
-        x=CX, y=CY-ph*0.5+20, font=ui.FONT_BOLD, fontSize=14, align="center"
-    }):setFillColor(0.35,0.85,1.0)
-
-    local p1 = PARTICIPANTS[p1Idx]
-    local p2 = PARTICIPANTS[p2Idx]
-    local winner = PARTICIPANTS[winnerIdx]
-
-    -- vs display
-    local vsY=CY-20
-    local p1Col = p1Idx==winnerIdx and {0.28,1.0,0.48} or {0.65,0.28,0.28}
-    local p2Col = p2Idx==winnerIdx and {0.28,1.0,0.48} or {0.65,0.28,0.28}
-
-    display.newText({ parent=resultPopup, text=p1.name,
-        x=CX-70, y=vsY-16, font=ui.FONT_BOLD, fontSize=13, align="center"
-    }):setFillColor(unpack(p1Col))
-    display.newText({ parent=resultPopup, text="Lv."..p1.level,
-        x=CX-70, y=vsY+2, font=ui.FONT_BOLD, fontSize=9, align="center"
-    }):setFillColor(0.50,0.58,0.75)
-    display.newText({ parent=resultPopup, text=math.max(0,math.floor(p1Hp)).." HP",
-        x=CX-70, y=vsY+18, font=ui.FONT_BOLD, fontSize=9, align="center"
-    }):setFillColor(unpack(p1Col))
-
-    display.newText({ parent=resultPopup, text="VS",
-        x=CX, y=vsY, font=ui.FONT_BOLD, fontSize=16, align="center"
-    }):setFillColor(0.55,0.60,0.72)
-
-    display.newText({ parent=resultPopup, text=p2.name,
-        x=CX+70, y=vsY-16, font=ui.FONT_BOLD, fontSize=13, align="center"
-    }):setFillColor(unpack(p2Col))
-    display.newText({ parent=resultPopup, text="Lv."..p2.level,
-        x=CX+70, y=vsY+2, font=ui.FONT_BOLD, fontSize=9, align="center"
-    }):setFillColor(0.50,0.58,0.75)
-    display.newText({ parent=resultPopup, text=math.max(0,math.floor(p2Hp)).." HP",
-        x=CX+70, y=vsY+18, font=ui.FONT_BOLD, fontSize=9, align="center"
-    }):setFillColor(unpack(p2Col))
-
-    -- winner line
-    display.newText({ parent=resultPopup,
-        text="🏆  "..winner.name.." WINS",
-        x=CX, y=CY+30, font=ui.FONT_BOLD, fontSize=15, align="center"
-    }):setFillColor(1.0,0.82,0.20)
-
-    -- OK button
-    local okBtn=display.newRoundedRect(resultPopup, CX, CY+ph*0.5-28, 120, 34, 8)
-    okBtn:setFillColor(0.04,0.18,0.42,0.97)
-    okBtn.strokeWidth=1.5; okBtn:setStrokeColor(0.25,0.65,1.0,0.80)
-    display.newText({ parent=resultPopup, text="CONTINUE",
-        x=CX, y=CY+ph*0.5-28, font=ui.FONT_BOLD, fontSize=12
-    }):setFillColor(0.75,0.90,1.0)
-    okBtn:addEventListener("tap", function()
-        closeResult(); if onClose then onClose() end; return true
+    makeNavButton(popup, CX, CY + 104, 158, 40, label, function()
+        if enabled then return startChallenge(slot) end
+        return true
     end)
 end
 
--------------------------------------------------
--- BUILD BRACKET UI
--------------------------------------------------
-local bracketGroup = nil
-
-local function buildBracket(sg)
-    if bracketGroup then bracketGroup:removeSelf(); bracketGroup=nil end
-    bracketGroup = display.newGroup()
-    sg:insert(bracketGroup)
-
-    -- Layout: 3 rounds side by side
-    -- QF (col 0), SF (col 1), Final (col 2)
-    local ROUND_LABELS = { "QUARTER\nFINALS", "SEMI\nFINALS", "FINAL" }
-    local COL_W    = (SW-20) / 3
-    local SLOT_H   = 42
-    local SLOT_PAD = 8
-    local startY   = CONTENT_TOP + 22
-
-    for r = 1, 3 do
-        local matches = bracketState[r]
-        local cx2 = 10 + (r-1)*COL_W + COL_W*0.5
-        local nMatches = #matches
-
-        -- round label
-        display.newText({ parent=bracketGroup, text=ROUND_LABELS[r],
-            x=cx2, y=startY-12, font=ui.FONT_BOLD, fontSize=7, align="center", width=COL_W-4
-        }):setFillColor(0.35,0.65,0.85)
-
-        -- vertical spacing for centering
-        local totalH = nMatches*(SLOT_H*2+SLOT_PAD*2) + (nMatches-1)*12
-        local blockStart = startY + (CONTENT_H - totalH)*0.5
-
-        for m = 1, nMatches do
-            local match = matches[m]
-            local blockY = blockStart + (m-1)*(SLOT_H*2+SLOT_PAD*2+12)
-
-            -- connector line between rounds
-            if r < 3 then
-                local lineX = cx2 + COL_W*0.5 - 2
-                local lineY = blockY + SLOT_H + SLOT_PAD*0.5
-                local ln=display.newRect(bracketGroup, lineX, lineY, 2, SLOT_H*2+SLOT_PAD*2)
-                ln:setFillColor(0.18,0.45,0.32,0.40)
-            end
-
-            for slot = 1, 2 do
-                local pIdx = slot==1 and match.p1 or match.p2
-                local sy2  = blockY + (slot-1)*(SLOT_H+SLOT_PAD)
-                local isWinner = match.winner and (match.winner == pIdx)
-                local isLoser  = match.winner and (match.winner ~= pIdx) and pIdx
-
-                -- slot bg
-                local slotBg=display.newRoundedRect(bracketGroup, cx2, sy2+SLOT_H*0.5, COL_W-6, SLOT_H, 6)
-                if isWinner then
-                    slotBg:setFillColor(0.04,0.20,0.10,0.97)
-                    slotBg.strokeWidth=1.5; slotBg:setStrokeColor(0.18,0.85,0.35,0.80)
-                elseif isLoser then
-                    slotBg:setFillColor(0.12,0.04,0.04,0.90)
-                    slotBg.strokeWidth=1; slotBg:setStrokeColor(0.55,0.18,0.18,0.55)
-                elseif pIdx then
-                    slotBg:setFillColor(0.04,0.10,0.24,0.97)
-                    slotBg.strokeWidth=1; slotBg:setStrokeColor(0.20,0.45,0.70,0.45)
-                else
-                    slotBg:setFillColor(0.02,0.04,0.10,0.80)
-                    slotBg.strokeWidth=1; slotBg:setStrokeColor(0.10,0.18,0.18,0.30)
-                end
-
-                if pIdx then
-                    local p = PARTICIPANTS[pIdx]
-                    local nameC = isWinner and {0.28,1.0,0.48} or (isLoser and {0.65,0.28,0.28} or {0.80,0.88,1.0})
-                    local nt=display.newText({ parent=bracketGroup, text=p.name,
-                        x=cx2-4, y=sy2+SLOT_H*0.5-8,
-                        font=ui.FONT_BOLD, fontSize=8, align="left", width=COL_W-16 })
-                    nt:setFillColor(unpack(nameC)); nt.anchorX=0; nt.x=cx2-COL_W*0.5+6
-                    local lvt=display.newText({ parent=bracketGroup, text="Lv."..p.level,
-                        x=cx2-COL_W*0.5+6, y=sy2+SLOT_H*0.5+6,
-                        font=ui.FONT_BOLD, fontSize=7, align="left" })
-                    lvt:setFillColor(0.40,0.58,0.80); lvt.anchorX=0
-                    if p.isPlayer then
-                        display.newText({ parent=bracketGroup, text="⭐",
-                            x=cx2+COL_W*0.5-10, y=sy2+SLOT_H*0.5,
-                            font=ui.FONT_BOLD, fontSize=10 })
-                    end
-                    if isWinner then
-                        display.newText({ parent=bracketGroup, text="W",
-                            x=cx2+COL_W*0.5-8, y=sy2+SLOT_H*0.5,
-                            font=ui.FONT_BOLD, fontSize=9 }):setFillColor(0.28,1.0,0.48)
-                    end
-                else
-                    display.newText({ parent=bracketGroup, text="TBD",
-                        x=cx2, y=sy2+SLOT_H*0.5,
-                        font=ui.FONT_BOLD, fontSize=8, align="center"
-                    }):setFillColor(0.25,0.30,0.38)
-                end
-            end
-
-            -- FIGHT button (only if both participants set and no winner yet)
-            if match.p1 and match.p2 and not match.winner then
-                local fightY = blockY + SLOT_H + SLOT_PAD*0.5
-                local capR=r; local capM=m; local capSg=sg
-
-                local fb=display.newRoundedRect(bracketGroup, cx2, fightY, COL_W-10, 18, 4)
-                fb:setFillColor(0.06,0.18,0.48,0.97)
-                fb.strokeWidth=1.5; fb:setStrokeColor(0.28,0.65,1.0,0.85)
-                local ft=display.newText({ parent=bracketGroup, text="FIGHT",
-                    x=cx2, y=fightY, font=ui.FONT_BOLD, fontSize=7 })
-                ft:setFillColor(0.55,0.85,1.0); ft.isHitTestable=false
-
-                fb:addEventListener("tap", function()
-                    local pm = bracketState[capR][capM]
-                    local winnerIdx, p1Hp, p2Hp = simulateFight(pm.p1, pm.p2)
-                    showResult(capSg, pm.p1, pm.p2, winnerIdx, p1Hp, p2Hp, function()
-                        advanceBracket(capR, capM, winnerIdx)
-                        buildBracket(capSg)
-                    end)
-                    return true
-                end)
-            end
-
-            -- champion label for final winner
-            if r==3 and matches[1].winner then
-                local champ=PARTICIPANTS[matches[1].winner]
-                local champY=blockY+SLOT_H*2+SLOT_PAD+14
-                display.newText({ parent=bracketGroup,
-                    text="🏆  CHAMPION",
-                    x=cx2, y=champY, font=ui.FONT_BOLD, fontSize=9, align="center"
-                }):setFillColor(1.0,0.82,0.20)
-                display.newText({ parent=bracketGroup,
-                    text=champ.name,
-                    x=cx2, y=champY+14, font=ui.FONT_BOLD, fontSize=8, align="center"
-                }):setFillColor(1.0,0.92,0.55)
-            end
+local function claimSlot(slot)
+    if not activeGuild or not activeGuild.guildId then return true end
+    api.guilds.claimLeagueSlot(activeGuild.guildId, slot.slot, function(response)
+        if applyGuildResponse(response) then
+            scene:buildContent()
         end
+    end)
+    return true
+end
+
+local function drawLeagueSlot(parent, slot, baseX, baseY)
+    local pos = SLOT_POSITIONS[slot.slot] or SLOT_POSITIONS[1]
+    local x = baseX + pos.x
+    local y = baseY + pos.y
+    local holder = slot.holder
+    local bg = display.newRoundedRect(parent, x, y, pos.w, pos.h, 4)
+    if pos.leader then
+        bg:setFillColor(0.95,0.72,0.16,0.98)
+        bg.strokeWidth = 2
+        bg:setStrokeColor(1.0,0.92,0.32,0.95)
+    else
+        bg:setFillColor(holder and 0.04 or 0.02, holder and 0.13 or 0.08, holder and 0.26 or 0.17, 0.96)
+        bg.strokeWidth = 1.5
+        bg:setStrokeColor(holder and 0.28 or 0.12, holder and 0.72 or 0.34, holder and 1.0 or 0.58, holder and 0.78 or 0.52)
     end
 
-    -- RESET button
-    local resetBtn=display.newRoundedRect(bracketGroup, CX, CONTENT_BOT-14, 110, 22, 6)
-    resetBtn:setFillColor(0.04,0.12,0.28,0.97)
-    resetBtn.strokeWidth=1.5; resetBtn:setStrokeColor(0.20,0.50,0.85,0.65)
-    display.newText({ parent=bracketGroup, text="RESET BRACKET",
-        x=CX, y=CONTENT_BOT-14, font=ui.FONT_BOLD, fontSize=7
-    }):setFillColor(0.45,0.68,1.0)
-    resetBtn:addEventListener("tap", function()
-        initBracket(); buildBracket(sg); return true
-    end)
+    local function onTap()
+        if holder then
+            return showSlotPopup(slot)
+        end
+        return claimSlot(slot)
+    end
+
+    if holder then
+        shell.drawPortrait(parent, x, y - 3, holder.name, holder.skinId, math.min(pos.w, pos.h) - 10)
+        display.newText({
+            parent=parent, text=holder.name or "Player",
+            x=x, y=y + pos.h * 0.5 + 12, width=86,
+            font=ui.FONT_BOLD, fontSize=8, align="center",
+        }):setFillColor(pos.leader and 1.0 or 0.82, pos.leader and 0.84 or 0.94, pos.leader and 0.24 or 1.0)
+        display.newText({
+            parent=parent, text="LV " .. tostring(holder.level or 1),
+            x=x, y=y + pos.h * 0.5 + 25,
+            font=ui.FONT_BOLD, fontSize=7,
+        }):setFillColor(0.50,0.72,0.96)
+    else
+        display.newText({
+            parent=parent, text="+",
+            x=x, y=y - 3, font=ui.FONT_BOLD, fontSize=20,
+        }):setFillColor(0.34,0.86,1.0)
+        display.newText({
+            parent=parent, text="EMPTY",
+            x=x, y=y + pos.h * 0.5 + 15,
+            font=ui.FONT_BOLD, fontSize=7,
+        }):setFillColor(0.46,0.62,0.82)
+    end
+    bg:addEventListener("tap", onTap)
+    local hit = display.newRect(parent, x, y + 14, math.max(pos.w, 82), pos.h + 48)
+    hit:setFillColor(1,1,1,0)
+    hit.isHitTestable = true
+    hit:addEventListener("tap", onTap)
 end
 
--------------------------------------------------
--- BOTTOM BAR
--------------------------------------------------
-local function buildBottomBar(sg, activeIdx)
-    guildNav.build(sg, "LEAGUE")
+function scene:buildContent()
+    clearContent()
+    contentGroup = display.newGroup()
+    scene.view:insert(contentGroup)
+    if chromeGroup and chromeGroup.toFront then chromeGroup:toFront() end
+
+    local teamTop = CONTENT_TOP + 6
+    local teamH = math.floor(CONTENT_H * 0.50)
+    local teamFrame = display.newRoundedRect(contentGroup, CX, teamTop + teamH * 0.5, SW - 16, teamH, 8)
+    teamFrame:setFillColor(0.015,0.035,0.08,0.92)
+    teamFrame.strokeWidth = 1.5
+    teamFrame:setStrokeColor(0.16,0.48,0.92,0.42)
+
+    display.newText({
+        parent=contentGroup, text="LEAGUE TEAM",
+        x=CX, y=teamTop + 17,
+        font=ui.FONT_BOLD, fontSize=11,
+    }):setFillColor(0.42,1.0,0.70)
+
+    local slots = (activeGuild and activeGuild.leagueSlots) or {}
+    local bySlot = {}
+    for _, slot in ipairs(slots) do bySlot[slot.slot] = slot end
+    for i = 1, 5 do
+        local slot = bySlot[i] or { slot=i, locked=i == 3, holder=nil }
+        drawLeagueSlot(contentGroup, slot, CX, teamTop + 36)
+    end
+
+    local histTop = teamTop + teamH + 8
+    local histH = CONTENT_BOT - histTop - 10
+    local histFrame = display.newRoundedRect(contentGroup, CX, histTop + histH * 0.5, SW - 16, histH, 8)
+    histFrame:setFillColor(0.02,0.055,0.13,0.94)
+    histFrame.strokeWidth = 1.5
+    histFrame:setStrokeColor(0.16,0.48,0.92,0.44)
+    display.newText({
+        parent=contentGroup, text="PREVIOUS LEAGUE FIGHTS",
+        x=CX, y=histTop + 17,
+        font=ui.FONT_BOLD, fontSize=10,
+    }):setFillColor(0.62,0.88,1.0)
+
+    local tournament = activeGuild and activeGuild.leagueTournament
+    local timerBody = "All guilds enter automatically every 24 hours."
+    if tournament and tournament.active then
+        timerBody = "Round " .. tostring(tournament.round or 1)
+            .. " - " .. tostring(tournament.guildsRemaining or 0) .. " guilds remaining."
+    end
+    local history = {
+        { title="LEAGUE STATUS", body=timerBody, kind="info" },
+        { title="LEAGUE BRACKET", body="Tap to view the current guild league tournament.", kind="bracket" },
+    }
+    for _, item in ipairs((activeGuild and activeGuild.leagueHistory) or {}) do
+        history[#history + 1] = item
+    end
+
+    local rowW = SW - 38
+    local rowH = 45
+    for i = 1, math.min(4, #history) do
+        local item = history[i]
+        local y = histTop + 48 + (i - 1) * (rowH + 7)
+        local row = display.newRoundedRect(contentGroup, CX, y, rowW, rowH, 7)
+        row:setFillColor(0.035,0.085,0.19,0.96)
+        row.strokeWidth = 1.3
+        row:setStrokeColor(0.22,0.64,1.0,0.48)
+        local title = display.newText({
+            parent=contentGroup, text=item.title or "LEAGUE",
+            x=CX - rowW * 0.5 + 11, y=y - 11,
+            width=rowW - 22, font=ui.FONT_BOLD, fontSize=8, align="left",
+        })
+        title.anchorX = 0
+        title:setFillColor(0.42,1.0,0.70)
+        local body = display.newText({
+            parent=contentGroup, text=item.body or "",
+            x=CX - rowW * 0.5 + 11, y=y + 9,
+            width=rowW - 22, font=ui.FONT_BOLD, fontSize=7, align="left",
+        })
+        body.anchorX = 0
+        body:setFillColor(0.76,0.86,1.0)
+        row:addEventListener("tap", function() bracketPopup(); return true end)
+    end
 end
 
--------------------------------------------------
--- SCENE CREATE
--------------------------------------------------
-function scene:create(event)
+function scene:create()
     local sg = self.view
-
-    local bg=display.newRect(sg, CX, CY, SW, SH); bg:setFillColor(0.02,0.03,0.08)
-    for i=1,20 do
-        local ln=display.newRect(sg, CX, i*(SH/20), SW, 1)
-        ln:setFillColor(0.05,0.18,0.42,0.04); ln.isHitTestable=false
+    local bg = display.newRect(sg, CX, CY, SW, SH)
+    bg:setFillColor(0.02,0.03,0.08)
+    for i = 1, 18 do
+        local line = display.newRect(sg, CX, i * (SH / 18), SW, 1)
+        line:setFillColor(0.06,0.18,0.42,0.04)
     end
-
-    -- header
-    drawFrame(sg, CX, HEADER_Y, SW-6, HEADER_H, FRAME_SMALL)
-    display.newRect(sg, CX, HEADER_H, SW, 2):setFillColor(0.15,0.55,0.35,0.55)
-    display.newText({ parent=sg, text="LEAGUE",
-        x=CX-30, y=HEADER_Y, font=ui.FONT_BOLD, fontSize=20, align="center"
-    }):setFillColor(0.25,0.95,0.58)
-    display.newText({ parent=sg, text="1v1 Tournament  ·  Tap FIGHT to simulate",
-        x=CX, y=HEADER_Y+18, font=ui.FONT_BOLD, fontSize=8, align="center"
-    }):setFillColor(0.38,0.52,0.65)
-
-    buildBottomBar(sg, 2)
-
-    if not bracketState then initBracket() end
-    buildBracket(sg)
+    shell.drawTitleBanner(sg, "LEAGUE", { y=36, height=54, color={0.35,1.0,0.68} })
 end
 
--------------------------------------------------
--- SCENE HIDE
--------------------------------------------------
+function scene:show(event)
+    if event.phase ~= "did" then return end
+    local params = (event and event.params) or {}
+    if params.guildId then
+        guildContext.setActiveGuild(params.guildId, params.guildKey)
+    end
+    shell.loadGuild(params, function(guild)
+        activeGuild = guild
+        if chromeGroup and chromeGroup.removeSelf then chromeGroup:removeSelf() end
+        chromeGroup = display.newGroup()
+        scene.view:insert(chromeGroup)
+        guildNav.build(chromeGroup, "LEAGUE")
+        shell.drawCloseToHome(chromeGroup, activeGuild)
+        scene:buildContent()
+    end)
+end
+
 function scene:hide(event)
     if event.phase ~= "will" then return end
-    closeResult()
+    clearContent()
+    if chromeGroup and chromeGroup.removeSelf then chromeGroup:removeSelf() end
+    chromeGroup = nil
 end
 
 scene:addEventListener("create", scene)
-scene:addEventListener("hide",   scene)
+scene:addEventListener("show", scene)
+scene:addEventListener("hide", scene)
+
 return scene

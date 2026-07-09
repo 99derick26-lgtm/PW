@@ -2,6 +2,7 @@ local composer = require("composer")
 local scene = composer.newScene()
 
 local api = require("utils.api")
+local radialMenu = require("utils.radial_menu")
 local ui = require("utils.ui")
 local widget = require("widget")
 
@@ -13,6 +14,21 @@ local SH = display.actualContentHeight
 local activeTab = "xp"
 local contentGroup
 local sceneRef
+
+local RADIAL_INNER = {
+    { icon="home",       label="Home",       scene="scenes.home"       },
+    { icon="bag",        label="Bag",        scene="scenes.bag"        },
+    { icon="shop",       label="Shop",       scene="scenes.shop"       },
+    { icon="leaderboard",label="Leaderboard",scene="scenes.leaderboard"},
+}
+
+local RADIAL_OUTER = {
+    { icon="fight",      label="Arena",      scene="scenes.arena"      },
+    { icon="skills",     label="Skills",     scene="scenes.skills"     },
+    { icon="pet",        label="Pets",       scene="scenes.pets"       },
+    { icon="squad",      label="Squad",      scene="scenes.squad"      },
+    { icon="tournament", label="Tournament", scene="scenes.tournament" },
+}
 
 local function clearGroup(group)
     if group and group.removeSelf then
@@ -35,7 +51,7 @@ local function openPlayerProfile(player)
 end
 
 local function makeTopBar(parent, title)
-    local header = display.newRect(parent, CX, 42, SW, 84)
+    local header = display.newRoundedRect(parent, CX, 24, SW - 24, 42, 8)
     header:setFillColor(0.02, 0.05, 0.12, 0.96)
     header.strokeWidth = 1
     header:setStrokeColor(0.18, 0.48, 0.82, 0.40)
@@ -44,7 +60,7 @@ local function makeTopBar(parent, title)
         parent = parent,
         text = title,
         x = CX,
-        y = 28,
+        y = 22,
         font = ui.FONT_BOLD,
         fontSize = 18,
         align = "center",
@@ -54,7 +70,7 @@ local function makeTopBar(parent, title)
         parent = parent,
         text = "< BACK",
         x = 34,
-        y = 28,
+        y = 22,
         font = ui.FONT_BOLD,
         fontSize = 11,
         align = "left",
@@ -102,11 +118,13 @@ local function renderComingSoon(group)
 end
 
 local function renderXpLeaderboard(group)
+    local scrollTop = 100
+    local scrollH = math.max(260, SH - 202)
     local scroll = widget.newScrollView({
         x = CX,
-        y = (SH + 116) * 0.5,
+        y = scrollTop + scrollH * 0.5,
         width = SW,
-        height = SH - 116,
+        height = scrollH,
         horizontalScrollDisabled = true,
         verticalScrollDisabled = false,
         hideBackground = true,
@@ -150,11 +168,18 @@ local function renderXpLeaderboard(group)
         end
 
         local players = response.data.players
-        local startY = 132
+        local startY = 52
         local rowH = 42
         local panelW = SW - 24
+        local contentHeight = startY + (#players * rowH) + 24
 
-        local header = display.newRoundedRect(rows, CX, 108, panelW, 28, 8)
+        local listPanel = display.newRoundedRect(rows, CX, contentHeight * 0.5 + 2, panelW, contentHeight + 24, 8)
+        listPanel:setFillColor(0.015, 0.04, 0.11, 0.84)
+        listPanel.strokeWidth = 1
+        listPanel:setStrokeColor(0.13, 0.48, 0.88, 0.28)
+        listPanel.isHitTestable = false
+
+        local header = display.newRoundedRect(rows, CX, 20, panelW - 10, 28, 8)
         header:setFillColor(0.02, 0.06, 0.14, 0.96)
         header.strokeWidth = 1
         header:setStrokeColor(0.18, 0.48, 0.82, 0.32)
@@ -163,7 +188,7 @@ local function renderXpLeaderboard(group)
             parent = rows,
             text = "LV.",
             x = 34,
-            y = 108,
+            y = 20,
             font = ui.FONT_BOLD,
             fontSize = 10,
             align = "left",
@@ -175,7 +200,7 @@ local function renderXpLeaderboard(group)
             parent = rows,
             text = "NAME",
             x = 84,
-            y = 108,
+            y = 20,
             font = ui.FONT_BOLD,
             fontSize = 10,
             align = "left",
@@ -187,7 +212,7 @@ local function renderXpLeaderboard(group)
             parent = rows,
             text = "XP ACQUIRED",
             x = SW - 34,
-            y = 108,
+            y = 20,
             font = ui.FONT_BOLD,
             fontSize = 10,
             align = "right",
@@ -246,7 +271,6 @@ local function renderXpLeaderboard(group)
             end)
         end
 
-        local contentHeight = startY + (#players * rowH) + 24
         rows.y = 0
         scroll:setScrollHeight(math.max(scroll.height, contentHeight))
     end)
@@ -256,6 +280,8 @@ local function rebuild(sceneObject)
     sceneObject = sceneObject or sceneRef
     if not sceneObject or not sceneObject.view then return end
 
+    radialMenu.destroy()
+
     if contentGroup then
         clearGroup(contentGroup)
         contentGroup = nil
@@ -264,20 +290,29 @@ local function rebuild(sceneObject)
     contentGroup = display.newGroup()
     sceneObject.view:insert(contentGroup)
 
-    local bg = display.newImage("assets/backgrounds/rooftop.png")
+    local bg = display.newImage("assets/sprites/ui/bg_home_grid.png")
     if bg then
-        bg:scale(math.max(SW / bg.width, SH / bg.height), math.max(SW / bg.width, SH / bg.height))
+        local scale = math.max(SW / bg.width, SH / bg.height)
+        bg:scale(scale, scale)
         bg.x = CX
         bg.y = CY
+        bg.isHitTestable = false
         contentGroup:insert(bg)
     else
         local fallback = display.newRect(contentGroup, CX, CY, SW, SH)
         fallback:setFillColor(0.02, 0.03, 0.08)
     end
 
+    local edgeLineL = display.newRect(contentGroup, 5, CY, 2, SH - 36)
+    edgeLineL:setFillColor(0.13, 0.54, 1.0, 0.58)
+    edgeLineL.isHitTestable = false
+    local edgeLineR = display.newRect(contentGroup, SW - 5, CY, 2, SH - 36)
+    edgeLineR:setFillColor(0.13, 0.54, 1.0, 0.58)
+    edgeLineR.isHitTestable = false
+
     makeTopBar(contentGroup, "LEADERBOARD")
 
-    local tabY = 86
+    local tabY = 72
     local tabW = (SW - 26) * 0.5
     tabButton(contentGroup, CX - tabW * 0.5 - 3, tabY, tabW, 30, "XP", activeTab == "xp", function()
         activeTab = "xp"
@@ -293,6 +328,12 @@ local function rebuild(sceneObject)
     else
         renderComingSoon(contentGroup)
     end
+
+    radialMenu.show(sceneObject.view, {
+        activeScene = "leaderboard",
+        inner       = RADIAL_INNER,
+        outer       = RADIAL_OUTER,
+    })
 end
 
 function scene:create(event)
@@ -307,6 +348,7 @@ end
 
 function scene:hide(event)
     if event.phase ~= "will" then return end
+    radialMenu.destroy()
     clearGroup(contentGroup)
     contentGroup = nil
 end
