@@ -14,6 +14,7 @@ local state = {
     accountId = nil,
     accountKey = nil,
     userId = nil,
+    installationId = nil,
     isOnlineEnabled = true,
 }
 
@@ -27,6 +28,17 @@ local function copyTable(src)
         out[k] = v
     end
     return out
+end
+
+local function makeInstallationId()
+    local ok, deviceId = pcall(function()
+        return system and system.getInfo and system.getInfo("deviceID")
+    end)
+    if ok and deviceId and deviceId ~= "" then
+        return "device_" .. tostring(deviceId)
+    end
+    math.randomseed(os.time())
+    return "install_" .. tostring(os.time()) .. "_" .. tostring(math.random(100000, 999999))
 end
 
 local function isLoopbackUrl(url)
@@ -85,6 +97,10 @@ function M.load()
         state.accountKey = makeAccountKey()
         persist()
     end
+    if not state.installationId or state.installationId == "" then
+        state.installationId = makeInstallationId()
+        persist()
+    end
 
     state.isOnlineEnabled = (type(state.baseUrl) == "string" and state.baseUrl ~= "")
 
@@ -128,6 +144,14 @@ function M.getAccountKey()
         persist()
     end
     return state.accountKey
+end
+
+function M.getInstallationId()
+    if not state.installationId or state.installationId == "" then
+        state.installationId = makeInstallationId()
+        persist()
+    end
+    return state.installationId
 end
 
 function M.clear()

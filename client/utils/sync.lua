@@ -3,45 +3,6 @@ local api = require("utils.api")
 
 local M = {}
 
-local ONLINE_PLAYER_KEYS = {
-    "name",
-    "displayName",
-    "level",
-    "xp",
-    "gold",
-    "diamonds",
-    "attack",
-    "defense",
-    "intelligence",
-    "speed",
-    "hp",
-    "energy",
-    "energyTs",
-    "appearance",
-    "skinId",
-    "inventory",
-    "equipped",
-    "materials",
-    "injections",
-    "guildVault",
-    "guildAuction",
-    "guildContributions",
-    "winRate",
-    "arenaFights",
-    "arenaWins",
-    "spells",
-    "tasks",
-    "guild",
-    "guilds",
-    "createdGuild",
-    "friends",
-    "messages",
-    "notifications",
-    "squad",
-    "rival",
-    "tournaments",
-}
-
 local function deepCopy(value)
     if type(value) ~= "table" then return value end
     local copy = {}
@@ -73,13 +34,10 @@ local function pruneGuildShortcuts(player)
 end
 
 function M.mergePlayerSnapshot(localPlayer, serverPlayer)
-    local merged = deepCopy(localPlayer or {})
     serverPlayer = serverPlayer or {}
-
-    for _, key in ipairs(ONLINE_PLAYER_KEYS) do
-        if serverPlayer[key] ~= nil then
-            merged[key] = deepCopy(serverPlayer[key])
-        end
+    local merged = deepCopy(serverPlayer)
+    if merged.lastLoginAt == nil and localPlayer and localPlayer.lastLoginAt ~= nil then
+        merged.lastLoginAt = localPlayer.lastLoginAt
     end
     if serverPlayer.displayName ~= nil then
         merged.name = tostring(serverPlayer.displayName)

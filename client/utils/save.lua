@@ -5,7 +5,7 @@ local guildContext = require("utils.guild_context")
 -------------------------------------------------
 -- ACTIVE PROFILE (set on profile select screen)
 -------------------------------------------------
-M.activeSlot = 1   -- 1..5, set before going to home
+M.activeSlot = 1
 M.accountKey = "default"
 
 local function safeKey(value)
@@ -223,38 +223,36 @@ local function saveIndex(idx)
 end
 
 -------------------------------------------------
--- PUBLIC: list all profile slots
--- Returns table[1..5]:  { slot, name } or nil
+-- PUBLIC: list all existing profile slots
 -------------------------------------------------
 function M.listProfiles()
     local idx  = loadIndex()
     local list = {}
-    for i = 1, 5 do
-        local name = idx.slots[i]   -- nil = empty slot
-        list[i] = name and { slot=i, name=name } or nil
+    for rawSlot, name in pairs(idx.slots or {}) do
+        local slot = tonumber(rawSlot)
+        if slot and slot >= 1 and name then
+            list[slot] = { slot=slot, name=name }
+        end
     end
     return list
 end
 
 -------------------------------------------------
 -- PUBLIC: create a new profile in the next open slot
--- Returns slot number, or nil if full
 -------------------------------------------------
 function M.createProfile(name)
     local idx = loadIndex()
-    for i = 1, 5 do
-        if not idx.slots[i] then
-            name = tostring(name or i)
-            idx.slots[i] = name
-            saveIndex(idx)
-            -- write default save file for that slot
-            local p = defaultPlayer(name)
-            local f = io.open(pathForSlot(i), "w")
-            if f then f:write(json.encode(p)); io.close(f) end
-            return i
-        end
+    local slot = 1
+    while idx.slots[slot] do
+        slot = slot + 1
     end
-    return nil  -- all 5 slots taken
+    name = tostring(name or slot)
+    idx.slots[slot] = name
+    saveIndex(idx)
+    local p = defaultPlayer(name)
+    local f = io.open(pathForSlot(slot), "w")
+    if f then f:write(json.encode(p)); io.close(f) end
+    return slot
 end
 
 function M.renameProfile(slot, name)
@@ -353,8 +351,8 @@ function M.searchProfiles(query)
     for accountKey, account in pairs(accounts) do
         local idx = loadIndexForAccount(accountKey)
         local userId = tostring((account and account.userId) or accountKey)
-        for slot = 1, 5 do
-            local profileName = idx.slots[slot]
+        for rawSlot, profileName in pairs(idx.slots or {}) do
+            local slot = tonumber(rawSlot)
             if profileName then
                 local haystack = (userId .. " " .. tostring(profileName)):lower()
                 if string.find(haystack, query, 1, true) then

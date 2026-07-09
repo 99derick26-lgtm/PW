@@ -11,6 +11,8 @@ const port = process.env.PORT || 3000;
 const host = process.env.HOST || "0.0.0.0";
 const dataPath = path.join(__dirname, "pixelwar-data.json");
 const useDatabaseState = Boolean(process.env.DATABASE_URL);
+// Change only for an intentional, one-time production wipe.
+const DATA_RESET_VERSION = "0.82-clean";
 
 app.use(express.json({ limit: "2mb" }));
 
@@ -54,6 +56,12 @@ function makeToken(accountId) {
   return `pw_${accountId}_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
 }
 
+function installationHash(value) {
+  const installationId = String(value || "").trim();
+  if (!installationId) return "";
+  return crypto.createHash("sha256").update(installationId).digest("hex");
+}
+
 function normalizeHandle(value) {
   return String(value || "").trim().toLowerCase();
 }
@@ -95,7 +103,7 @@ function setAccountPassword(account, password) {
 
 function clampProfileSlot(value) {
   const slot = Number(value) || 1;
-  return Math.max(1, Math.min(5, Math.floor(slot)));
+  return Math.max(1, Math.min(1000000, Math.floor(slot)));
 }
 
 function maxBaseHpForLevel(level) {
@@ -153,6 +161,7 @@ function totalAccumulatedXp(level, currentXp) {
 
 function defaultState() {
   return {
+    dataResetVersion: DATA_RESET_VERSION,
     accounts: {},
     tokens: {},
     players: {},
@@ -174,7 +183,11 @@ function defaultState() {
 let state = defaultState();
 
 function mergeState(savedState) {
-  return { ...defaultState(), ...(savedState || {}) };
+  const merged = { ...defaultState(), ...(savedState || {}) };
+  if (!savedState || !Object.prototype.hasOwnProperty.call(savedState, "dataResetVersion")) {
+    merged.dataResetVersion = null;
+  }
+  return merged;
 }
 
 function loadStateFromFile() {
@@ -237,7 +250,7 @@ function saveState(nextState = state) {
   const stateSnapshot = snapshotValue(nextState);
   if (!useDatabaseState) {
     fs.writeFileSync(dataPath, JSON.stringify(stateSnapshot, null, 2));
-    return;
+    return Promise.resolve();
   }
 
   saveQueue = saveQueue
@@ -245,11 +258,17 @@ function saveState(nextState = state) {
     .catch((error) => {
       console.error("Failed to save state to database:", error);
     });
+  return saveQueue;
 }
 
 async function initializeState() {
   state = await loadState();
   let needsSave = false;
+  if (useDatabaseState && state.dataResetVersion !== DATA_RESET_VERSION) {
+    state = defaultState();
+    needsSave = true;
+    console.log(`Applied one-time data reset ${DATA_RESET_VERSION}.`);
+  }
   if (!state.guildLeagueTournament || !state.guildLeagueTournament.nextStartsAt) {
     ensureGuildLeagueTournament();
     needsSave = true;
@@ -265,7 +284,7 @@ async function initializeState() {
   })) {
     needsSave = true;
   }
-  if (needsSave) saveState();
+  if (needsSave) await saveState();
 }
 
 function snapshotValue(value) {
@@ -479,7 +498,7 @@ function seedPlayer(seed, playerId, displayName, level, currentScene, guildId, g
     status: "online",
     currentScene,
     guilds: guildId ? [{ guildId, name: guildName, role }] : [],
-    weapons: [],
+    weapons: ["dagger_basic", "katana_speed", "scrap_gun"],
     pets: [],
     bio: "Server seed player.",
   };
@@ -534,10 +553,58 @@ function createPlayer(account, playerId, displayName, profileSlot) {
     profileSlot,
     displayName,
     level: 1,
+    xp: 0,
+    gold: 6000,
+    diamonds: 0,
+    attack: 100,
+    defense: 100,
+    intelligence: 5,
+    speed: 100,
+    hp: 100,
+    energy: 30,
+    energyTs: Math.floor(Date.now() / 1000),
     status: "online",
     currentScene: "Home",
+    appearance: { skinId: "street_brawler" },
+    skinId: "street_brawler",
+    inventory: [],
+    equipped: {
+      weapons: ["dagger_basic", "katana_speed", "scrap_gun"],
+      armor: { helmet: null, chest: null, gloves: null, boots: null },
+      pets: [],
+      accessories: {},
+    },
+    currentWeaponIndex: 1,
+    materials: {
+      scrap: 0,
+      coil: 0,
+      chip: 0,
+      crystal_green: 0,
+      crystal_blue: 0,
+      crystal_purple: 0,
+      crystal_orange: 0,
+      augment_attack: 0,
+      augment_defense: 0,
+      augment_health: 0,
+      augment_speed: 0,
+    },
+    injections: { active: {}, cooldowns: {} },
+    guildVault: {},
+    guildAuction: [],
+    guildContributions: {},
     guilds: [],
-    weapons: [],
+    spells: {},
+    tasks: {},
+    chests: { common: 0, rare: 0 },
+    petAugments: {},
+    arenaFights: 0,
+    arenaWins: 0,
+    winRate: "0%",
+    notifications: [],
+    squad: { conquered: [] },
+    rival: false,
+    tournaments: {},
+    weapons: ["dagger_basic", "katana_speed", "scrap_gun"],
     pets: [],
     bio: "Pixel War player.",
   };
@@ -572,6 +639,8 @@ function getAuthedPlayer(req) {
   if (!accountId) return null;
   const account = normalizeAccount(state.accounts[accountId]);
   if (!account) return null;
+  const requestInstallationHash = installationHash(req.headers["x-installation-id"]);
+  if (account.installationHash && requestInstallationHash !== account.installationHash) return null;
   return state.players[tokenPlayerId || account.activePlayerId || account.playerId] || null;
 }
 
@@ -1767,6 +1836,7 @@ app.get("/health", (req, res) => {
     ok: true,
     service: "pixel-wars-server",
     releaseVersion: "0.82",
+    dataResetVersion: state.dataResetVersion,
     routeVersion: "notifications-v1",
     time: new Date().toISOString(),
   });
@@ -1859,13 +1929,19 @@ app.get("/debug/audit", requireDebugAccess, (req, res) => {
 });
 
 function registerOrLogin(req, res) {
-  const requestedDisplayName = String(req.body.displayName || req.body.name || "Player").trim().slice(0, 24);
+  const requestedDisplayName = String(
+    req.body.displayName || req.body.name || req.body.userId || req.body.username || "Player"
+  ).trim().slice(0, 24);
   const header = req.headers.authorization || "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : null;
   const tokenContext = token && state.tokens[token];
   const authedAccountId = typeof tokenContext === "string" ? tokenContext : tokenContext && tokenContext.accountId;
   const userId = String(req.body.userId || req.body.username || req.body.accountKey || req.body.deviceId || "").trim().slice(0, 32);
   const password = String(req.body.password || "");
+  const requestInstallationHash = installationHash(req.body.installationId || req.headers["x-installation-id"]);
+  if (!requestInstallationHash) {
+    return res.status(400).json({ ok: false, error: "installation_id_required" });
+  }
   const accountKey = slug(req.body.accountKey || userId || req.body.deviceId || req.body.accountId || requestedDisplayName);
   const profileSlot = clampProfileSlot(req.body.profileSlot);
   const requestedAccountId = `account_${accountKey || slug(requestedDisplayName) || Date.now()}`;
@@ -1901,6 +1977,7 @@ function registerOrLogin(req, res) {
       playerId,
       playerIds: [],
       profileSlots: {},
+      installationHash: requestInstallationHash,
       createdAt: new Date().toISOString(),
     };
     setAccountPassword(account, password);
@@ -1912,14 +1989,15 @@ function registerOrLogin(req, res) {
       return res.status(401).json({ ok: false, error: "wrong_password" });
     }
   }
+  if (account.installationHash && account.installationHash !== requestInstallationHash) {
+    return res.status(403).json({ ok: false, error: "device_mismatch" });
+  }
+  account.installationHash = account.installationHash || requestInstallationHash;
 
   playerId = `player_${account.accountKey || accountKey || slug(requestedDisplayName) || Date.now()}_slot_${profileSlot}`;
 
   let activePlayerId = account.profileSlots[String(profileSlot)];
   if (!activePlayerId) {
-    if (account.playerIds.length >= 5) {
-      return res.status(400).json({ ok: false, error: "max_profiles_reached" });
-    }
     activePlayerId = playerId;
     account.profileSlots[String(profileSlot)] = activePlayerId;
     account.playerIds.push(activePlayerId);
@@ -1972,9 +2050,6 @@ app.post("/v1/account/profiles", requirePlayer, (req, res) => {
   let playerId = account.profileSlots[slotKey];
 
   if (!playerId) {
-    if (account.playerIds.length >= 5) {
-      return res.status(400).json({ ok: false, error: "max_profiles_reached" });
-    }
     playerId = `player_${account.accountKey || slug(account.userId) || Date.now()}_slot_${profileSlot}`;
     account.profileSlots[slotKey] = playerId;
     account.playerIds.push(playerId);
@@ -3514,13 +3589,32 @@ app.post("/v1/chat/world", (req, res) => {
 
 initializeState()
   .then(() => {
-    app.listen(port, host, () => {
+    const server = app.listen(port, host, () => {
       console.log(`Server running at http://${host}:${port}`);
     });
     const guildLeagueTimer = setInterval(() => {
       if (materializeGuildLeagueTournament()) saveState();
     }, 30 * 1000);
     if (guildLeagueTimer.unref) guildLeagueTimer.unref();
+
+    let shuttingDown = false;
+    const shutdown = async (signal) => {
+      if (shuttingDown) return;
+      shuttingDown = true;
+      console.log(`${signal} received; saving state before shutdown.`);
+      clearInterval(guildLeagueTimer);
+      try {
+        await saveState();
+        await new Promise((resolve) => server.close(resolve));
+        await pool.end();
+        process.exit(0);
+      } catch (error) {
+        console.error("Graceful shutdown failed:", error);
+        process.exit(1);
+      }
+    };
+    process.once("SIGTERM", () => shutdown("SIGTERM"));
+    process.once("SIGINT", () => shutdown("SIGINT"));
   })
   .catch((error) => {
     console.error("Failed to initialize server state:", error);

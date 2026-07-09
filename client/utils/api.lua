@@ -15,6 +15,7 @@ local function buildHeaders(extraHeaders)
     local headers = {
         ["Content-Type"] = "application/json",
         ["Accept"] = "application/json",
+        ["X-Installation-Id"] = session.getInstallationId(),
     }
 
     local authHeader = session.getAuthHeader()

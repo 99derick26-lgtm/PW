@@ -18,7 +18,6 @@ local SH = display.actualContentHeight
 local CARD_W   = SW * 0.72
 local CARD_H   = SH * 0.38
 local CARD_GAP = SW * 0.82   -- spacing between card centers
-local MAX_SLOTS = 5
 
 local TIMERS   = {}
 local RAIN_COUNT = 40
@@ -28,8 +27,9 @@ local RAIN_COLOR = { 0.1, 0.6, 1.0, 0.25 }
 -- STATE
 -------------------------------------------------
 local profiles      = {}   -- save.listProfiles() result
-local cards         = {}   -- display groups per slot index 1..5
+local cards         = {}
 local currentIndex  = 1    -- which card is centered
+local totalSlots    = 1
 local cardContainer        -- group that holds all cards (we slide this)
 local rainDrops     = {}
 
@@ -42,7 +42,6 @@ local startLocked   = false
 local activeNameField = nil
 local activeNameOverlay = nil
 local sceneGroupRef = nil
-local dotsRef = {}
 local refreshDotsRef = nil
 local buildCard
 local snapToIndex
@@ -59,7 +58,7 @@ local function normalizeServerProfiles(list)
         if not slot and prof.playerId then
             slot = tonumber(string.match(tostring(prof.playerId), "_slot_(%d+)$"))
         end
-        if slot and slot >= 1 and slot <= MAX_SLOTS then
+        if slot and slot >= 1 then
             mapped[slot] = {
                 slot = slot,
                 name = prof.displayName or prof.name or tostring(slot),
@@ -75,6 +74,15 @@ local function normalizeServerProfiles(list)
     return mapped
 end
 
+local function countProfileSlots()
+    local highest = 0
+    for rawSlot, prof in pairs(profiles or {}) do
+        local slot = tonumber(rawSlot)
+        if prof and slot and slot > highest then highest = slot end
+    end
+    return highest + 1
+end
+
 local function rebuildProfileCards()
     if not sceneGroupRef or not cardContainer or not cardContainer.removeSelf then return end
     for i, grp in pairs(cards) do
@@ -82,7 +90,9 @@ local function rebuildProfileCards()
         cards[i] = nil
     end
 
-    for i = 1, MAX_SLOTS do
+    totalSlots = countProfileSlots()
+    currentIndex = math.max(1, math.min(currentIndex or 1, totalSlots))
+    for i = 1, totalSlots do
         local cardX = (i - 1) * CARD_GAP
         local grp = buildCard(cardContainer, i, profiles[i], cardX)
         grp.x = cardX
@@ -258,11 +268,18 @@ buildCard = function(sceneGroup, slotIndex, prof, cardX)
         delTxt.isHitTestable = false
 
         delBtn:addEventListener("tap", function()
-            api.player.deleteProfile(prof.slot, function() end)
-            save.deleteProfile(prof.slot)
-            -- reload scene
-            composer.removeScene("scenes.profile_select")
-            composer.gotoScene("scenes.profile_select", { effect="fade", time=200 })
+            local function reloadAfterDelete()
+                save.deleteProfile(prof.slot)
+                composer.removeScene("scenes.profile_select")
+                composer.gotoScene("scenes.profile_select", { effect="fade", time=200 })
+            end
+            if hasOnlineSession() then
+                api.player.deleteProfile(prof.slot, function(response)
+                    if response and response.ok then reloadAfterDelete() end
+                end)
+            else
+                reloadAfterDelete()
+            end
             return true
         end)
 
@@ -362,7 +379,7 @@ function scene:create(event)
     currentIndex = 1
     cards = {}
     rainDrops = {}
-    profiles = save.listProfiles()
+    profiles = hasOnlineSession() and {} or save.listProfiles()
 
     -- bg
     local bg = display.newRect(sceneGroup, CX, CY, SW, SH)
@@ -397,26 +414,16 @@ function scene:create(event)
 
     display.newRect(sceneGroup, CX, titleY + 16, 240, 1):setFillColor(0.2, 0.6, 1, 0.4)
 
-    -- dot indicators
-    local dotsY  = SH * 0.80
-    local dotGap = 14
-    local dots   = {}
-    for i = 1, MAX_SLOTS do
-        local d = display.newCircle(sceneGroup, CX + (i - 3) * dotGap, dotsY, 3)
-        d:setFillColor(0.2, 0.4, 0.7)
-        dots[i] = d
-    end
-    -- highlight active dot
+    -- Compact counter stays readable even with a large profile collection.
+    local slotCounter = display.newText({
+        parent=sceneGroup, text="1 / 1",
+        x=CX, y=SH * 0.80,
+        font=ui.FONT_BOLD, fontSize=9, align="center"
+    })
+    slotCounter:setFillColor(0.3, 0.8, 1.0)
     local function refreshDots(idx)
-        for i, d in ipairs(dots) do
-            d:setFillColor(i == idx and 0.3 or 0.2,
-                           i == idx and 0.8 or 0.4,
-                           i == idx and 1.0 or 0.7)
-            d.xScale = i == idx and 1.4 or 1.0
-            d.yScale = i == idx and 1.4 or 1.0
-        end
+        slotCounter.text = tostring(idx) .. " / " .. tostring(totalSlots)
     end
-    dotsRef = dots
     refreshDotsRef = refreshDots
 
     -- name label
@@ -432,7 +439,8 @@ function scene:create(event)
     sceneGroup:insert(cardContainer)
     cardContainer.y = CY - 10
 
-    for i = 1, MAX_SLOTS do
+    totalSlots = countProfileSlots()
+    for i = 1, totalSlots do
         local cardX = (i - 1) * CARD_GAP
         local grp   = buildCard(cardContainer, i, profiles[i], cardX)
         grp.x       = cardX
@@ -521,7 +529,7 @@ function scene:create(event)
             if swipeStartX then
                 local dx = event.x - swipeStartX
                 local newIdx = currentIndex
-                if dx < -SWIPE_THRESHOLD and currentIndex < MAX_SLOTS then
+                if dx < -SWIPE_THRESHOLD and currentIndex < totalSlots then
                     newIdx = currentIndex + 1
                 elseif dx > SWIPE_THRESHOLD and currentIndex > 1 then
                     newIdx = currentIndex - 1

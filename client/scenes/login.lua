@@ -219,18 +219,6 @@ function scene:create(event)
     })
     errorText:setFillColor(1.0, 0.35, 0.35)
 
-    local debugText = display.newText({
-        parent = sceneGroup,
-        text = "URL: " .. tostring(session.get().baseUrl or "nil"),
-        x = CX,
-        y = btnY + 104,
-        width = SW - 44,
-        font = ui.FONT,
-        fontSize = 8,
-        align = "center"
-    })
-    debugText:setFillColor(0.55, 0.70, 0.92)
-
     local locked = false
     local authMode = nil
 
@@ -271,7 +259,6 @@ function scene:create(event)
         btnBg:setFillColor(mode == "register" and 0.02 or 0.04, mode == "register" and 0.30 or 0.18, mode == "register" and 0.20 or 0.55)
         btnTxt:setFillColor(0.4, 0.9, 1)
         errorText.text = ""
-        debugText.text = "URL: " .. tostring(session.get().baseUrl or "nil")
     end
 
     local function getErrorCode(response)
@@ -313,8 +300,6 @@ function scene:create(event)
         btnTxt:setFillColor(1, 1, 1)
         errorText:setFillColor(0.95, 0.82, 0.25)
         errorText.text = "CONNECTING..."
-        debugText.text = "URL: " .. tostring(session.get().baseUrl or "nil")
-
         -- A stale auth token would make the server keep using the old account,
         -- even when the player typed a different username/password here.
         session.clear()
@@ -323,6 +308,7 @@ function scene:create(event)
             userId = userId,
             password = password,
             accountKey = accountKey,
+            installationId = session.getInstallationId(),
         }
         local authCall = authMode == "register" and api.auth.register or api.auth.login
 
@@ -337,7 +323,7 @@ function scene:create(event)
                 }
                 saveAccounts(data)
 
-                save.setAccountKey(accountKey)
+                save.setAccountKey(response.data.accountKey or accountKey)
                 session.setTokens(response.data.accessToken, response.data.refreshToken)
                 session.setIdentity({
                     accountId = response.data.accountId,
@@ -366,31 +352,35 @@ function scene:create(event)
                     else
                         errorText.text = "USER ID ALREADY REGISTERED"
                     end
+                elseif errorCode == "device_mismatch" then
+                    errorText.text = "ACCOUNT LINKED TO ANOTHER DEVICE"
                 else
                     errorText.text = "SERVER OFFLINE"
                 end
-                debugText.text = "URL: " .. tostring(session.get().baseUrl or "nil")
-                    .. "  STATUS: " .. tostring(response.status or 0)
-                    .. "  ERROR: " .. tostring(errorCode or "nil")
             end
         end)
         return true
     end)
 
     showChoice()
-
-    display.newText({
-        parent = sceneGroup,
-        text = "SERVER ACCOUNT  -  5 PROFILES PER LOGIN",
-        x = CX, y = SH - 24,
-        font = ui.FONT, fontSize = 8, align = "center"
-    }):setFillColor(0.2, 0.3, 0.5, 0.6)
 end
 
 function scene:show(event)
     if event.phase ~= "did" then return end
     if userField then userField.isVisible = self.authFormVisible == true end
     if passField then passField.isVisible = self.authFormVisible == true end
+    if not self.autoSignInAttempted and session.getAuthHeader() then
+        self.autoSignInAttempted = true
+        api.player.profiles(function(response)
+            if response and response.ok then
+                local current = session.get()
+                save.setAccountKey(current.accountKey)
+                composer.gotoScene("scenes.profile_select", { effect="fade", time=250 })
+            else
+                session.clear()
+            end
+        end)
+    end
 end
 
 function scene:hide(event)
