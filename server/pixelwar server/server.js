@@ -13,6 +13,7 @@ const dataPath = path.join(__dirname, "pixelwar-data.json");
 const useDatabaseState = Boolean(process.env.DATABASE_URL);
 // Change only for an intentional, one-time production wipe.
 const DATA_RESET_VERSION = "0.82-clean";
+const PATCH_VERSION = "quests-sync-v1";
 
 app.use(express.json({ limit: "2mb" }));
 
@@ -1836,6 +1837,7 @@ app.get("/health", (req, res) => {
     ok: true,
     service: "pixel-wars-server",
     releaseVersion: "0.82",
+    patchVersion: PATCH_VERSION,
     dataResetVersion: state.dataResetVersion,
     routeVersion: "notifications-v1",
     time: new Date().toISOString(),
