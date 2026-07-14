@@ -1,5 +1,6 @@
 local tasksUtil = require("utils.tasks")
 local saveUtil = require("utils.save")
+local sync = require("utils.sync")
 local xpUtil = require("utils.xp")
 local ui = require("utils.ui")
 local levelUpPopup = require("utils.levelup_popup")
@@ -211,6 +212,7 @@ function M.process(sceneView, player, updates, onClose)
 
     applyLevelUps(player)
     saveUtil.save(player)
+    sync.pushPlayerSnapshot(player)
     showPopup(sceneView, completedEntries, onClose)
     return true, completedEntries
 end

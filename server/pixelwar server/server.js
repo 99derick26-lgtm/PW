@@ -2151,6 +2151,7 @@ app.patch("/v1/player/me", requirePlayer, (req, res) => {
     p.displayName = requestedName;
   }
   p.level = body.level || p.level || 1;
+  p.xp = Number.isFinite(Number(body.xp)) ? Number(body.xp) : (p.xp || 0);
   p.gold = Number.isFinite(Number(body.gold)) ? Number(body.gold) : (p.gold || 0);
   p.diamonds = Number.isFinite(Number(body.diamonds)) ? Number(body.diamonds) : (p.diamonds || 0);
   p.attack = Number.isFinite(Number(body.attack)) ? Number(body.attack) : p.attack;
@@ -2171,6 +2172,10 @@ app.patch("/v1/player/me", requirePlayer, (req, res) => {
   p.injections = body.injections || p.injections || { active: {}, cooldowns: {} };
   p.injections.active = p.injections.active || {};
   p.injections.cooldowns = p.injections.cooldowns || {};
+  p.tasks = body.tasks && typeof body.tasks === "object" ? body.tasks : (p.tasks || {});
+  p.chests = body.chests && typeof body.chests === "object" ? body.chests : (p.chests || { common: 0, rare: 0 });
+  p.petAugments = body.petAugments && typeof body.petAugments === "object" ? body.petAugments : (p.petAugments || {});
+  p.spells = body.spells && typeof body.spells === "object" ? body.spells : (p.spells || {});
   p.guildVault = body.guildVault || p.guildVault || {};
   p.guildAuction = Array.isArray(body.guildAuction) ? body.guildAuction : (p.guildAuction || []);
   p.guildContributions = body.guildContributions || p.guildContributions || {};

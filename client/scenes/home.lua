@@ -672,6 +672,7 @@ local function buildTasksPopup(sceneView, onClose)
                 local xpGain, goldGain = tasksUtil.claim(p2, capId)
                 if xpGain then
                     save.save(p2)
+                    sync.pushPlayerSnapshot(p2)
                     local toast = display.newText({ parent=content,
                         text="+"..xpGain.." XP   +"..goldGain.."g",
                         x=panelX, y=panelY, font=ui.FONT_BOLD, fontSize=20 })
@@ -825,6 +826,7 @@ local function buildTaskQuickPopup(sceneView, taskItem)
             if xpGain then
                 applyLevelUps(freshPlayer)
                 save.save(freshPlayer)
+                sync.pushPlayerSnapshot(freshPlayer)
             end
             closePopup()
             composer.gotoScene("scenes.home", { effect="crossFade", time=0 })
