@@ -76,15 +76,53 @@ local STAT_BANNERS = {
     hp      = "assets/sprites/ui/icons/hp_banner.png",
 }
 
+local STAT_BANNER_WIDTH = 72
+local STAT_BANNER_HEIGHT = 32
+local STAT_VALUE_OFFSET_X = 44
+local STAT_COLUMN_GAP = 128
+
+local WEAPON_STAT_ORDER = { attack=1, defense=2, speed=3, hp=4 }
+local ARMOR_STAT_ORDER = { hp=1, defense=2, speed=3, attack=4 }
+
+local function orderGearStats(item, entries)
+    local slot = item and item.slot
+    local order
+    if slot == "weapon" then
+        order = WEAPON_STAT_ORDER
+    elseif slot == "helmet" or slot == "chest" or slot == "gloves"
+        or slot == "boots" or slot == "necklace" or slot == "ring"
+        or slot == "charm" then
+        order = ARMOR_STAT_ORDER
+    else
+        return false
+    end
+
+    table.sort(entries, function(a, b)
+        local aRank = order[a.stat] or 99
+        local bRank = order[b.stat] or 99
+        if aRank == bRank then
+            return tostring(a.stat) < tostring(b.stat)
+        end
+        return aRank < bRank
+    end)
+    return true
+end
+
 local function drawStatBanner(parent, statKey, x, y, value)
-    local ok, banner = pcall(display.newImageRect, parent, STAT_BANNERS[statKey], 72, 32)
+    local ok, banner = pcall(
+        display.newImageRect,
+        parent,
+        STAT_BANNERS[statKey],
+        STAT_BANNER_WIDTH,
+        STAT_BANNER_HEIGHT
+    )
     if ok and banner then
         banner.x = x
         banner.y = y
     end
     local st = display.newText({
         parent=parent, text=tostring(value or ""),
-        x=x + 52, y=y, width=70,
+        x=x + STAT_VALUE_OFFSET_X, y=y, width=70,
         font=ui.FONT_BOLD, fontSize=14, align="left"
     })
     st.anchorX = 0
@@ -1032,13 +1070,13 @@ showItemPopup = function(item)
 
     local statsStartX = cx - 102
     local statsStartY = cy + 22
-    local statColGap = 138
     local statCellH = 34
+    local verticalGearStats = orderGearStats(item, statEntries)
     for i = 1, math.min(4, #statEntries) do
         local entry = statEntries[i]
-        local col = (i - 1) % 2
-        local row = math.floor((i - 1) / 2)
-        local sx = statsStartX + col * statColGap
+        local col = verticalGearStats and 0 or ((i - 1) % 2)
+        local row = verticalGearStats and (i - 1) or math.floor((i - 1) / 2)
+        local sx = statsStartX + col * STAT_COLUMN_GAP
         local sy = statsStartY + row * statCellH
         drawStatBanner(content, entry.stat, sx, sy, entry.text)
     end

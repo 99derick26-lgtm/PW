@@ -278,15 +278,17 @@ function scene:create(event)
     searchPanel.strokeWidth = 1.5
     searchPanel:setStrokeColor(0.18, 0.50, 1.0, 0.58)
 
-    display.newText({
+    local searchLabel = display.newText({
         parent = sg,
         text = "SEARCH PLAYER",
-        x = 18,
+        x = 22,
         y = SEARCH_TOP + 14,
         font = ui.FONT_BOLD,
         fontSize = 9,
         align = "left",
-    }):setFillColor(0.38, 0.86, 1.0)
+    })
+    searchLabel.anchorX = 0
+    searchLabel:setFillColor(0.38, 0.86, 1.0)
 
     local searchBg = display.newRoundedRect(sg, CX - 34, SEARCH_TOP + 42, SW - 138, 32, 7)
     searchBg:setFillColor(0.04, 0.10, 0.24, 0.98)

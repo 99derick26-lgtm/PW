@@ -47,6 +47,8 @@ local hpBars = {
 }
 
 local hpFrameSheet = nil
+local streetBrawlerSheets = {}
+local ATTACK_PACE_SCALE = 1.40
 local HP_FRAME_FRAMES = {
     player = { x = 398, y = 376, width = 230, height = 660 },
     enemy  = { x = 398, y = 541, width = 230, height = 660 },
@@ -79,9 +81,14 @@ local performAttack
 local updateWeaponHUD
 local finishBattle
 local getWeaponDefForAttacker
+local setStreetBrawlerIdleVisible
 
 local function scaledTime(ms)
     return math.max(1, math.floor((ms or 1) / math.max(1, battleSpeed)))
+end
+
+local function attackPacedTime(ms)
+    return math.max(1, math.floor((ms or 1) * ATTACK_PACE_SCALE))
 end
 
 local function trackDelay(delay, fn)
@@ -202,6 +209,22 @@ local function trySetSprite(sprite, path)
     end
     print("[arena_battle] missing sprite: " .. tostring(path))
     return false
+end
+
+local function setPetPoseOrIdle(sprite, petId, team, pose)
+    if not sprite or not petId then return false end
+    local path
+    if pose == "attack" then
+        path = petAssets.attackWithFallback(petId, team)
+    elseif pose == "hit" then
+        path = petAssets.hitWithFallback(petId, team)
+    elseif pose == "dead" then
+        path = petAssets.deadWithFallback(petId, team)
+    else
+        path = petAssets.battleWithFallback(petId, team)
+    end
+    if trySetSprite(sprite, path) then return true end
+    return trySetSprite(sprite, petAssets.battleWithFallback(petId, team))
 end
 
 local function spawnPetFallback(root, size, team)
@@ -455,6 +478,9 @@ local function setCharacterPose(unit, pose, fallbackPose)
     local skin = sprite.skinId or (normalized == "player" and playerSkinId() or opponentSkinId())
     local base = "assets/sprites/characters/" .. skin .. "/"
     local extensions = { ".png", ".jpg", ".jpeg" }
+    if setStreetBrawlerIdleVisible then
+        setStreetBrawlerIdleVisible(sprite, false)
+    end
     sprite.alpha = 1
 
     for _, ext in ipairs(extensions) do
@@ -544,6 +570,40 @@ end
 -- FLOATING WEAPON (attaches to attacker sprite)
 -- Spawns during performAttack, removed when attacker returns home.
 -------------------------------------------------
+local function isMeleeWeapon(weaponDef)
+    return weaponDef and weaponDef.icon and weaponDef.ranged ~= true
+end
+
+local function meleeWeaponDisplaySize(weaponDef)
+    local token = string.lower(table.concat({
+        tostring(weaponDef and weaponDef.id or ""),
+        tostring(weaponDef and weaponDef.name or ""),
+        tostring(weaponDef and weaponDef.icon or ""),
+    }, " "))
+
+    if token:find("dagger", 1, true) then return 44 end
+    if token:find("spear", 1, true) or token:find("trident", 1, true) then return 78 end
+    if token:find("hammer", 1, true)
+        or token:find("axe", 1, true)
+        or token:find("executioner", 1, true)
+        or token:find("mammoth", 1, true)
+    then
+        return 66
+    end
+    if token:find("sickle", 1, true)
+        or token:find("sword", 1, true)
+        or token:find("blade", 1, true)
+        or token:find("katana", 1, true)
+        or token:find("machete", 1, true)
+        or token:find("crowbar", 1, true)
+        or token:find("stick", 1, true)
+        or token:find("pipe", 1, true)
+    then
+        return 58
+    end
+    return 54
+end
+
 local function attachWeaponToSprite(attackerSprite, weaponDef)
     -- clean up previous floating icon if any
     if weaponHUD.floatingIcon and weaponHUD.floatingIcon.removeSelf then
@@ -553,11 +613,20 @@ local function attachWeaponToSprite(attackerSprite, weaponDef)
 
     if not attackerSprite or not weaponDef or not weaponDef.icon then return end
 
+    local melee = isMeleeWeapon(weaponDef)
+    local iconSize = melee and meleeWeaponDisplaySize(weaponDef) or 36
     local ok, icon = pcall(display.newImageRect, battleRoot,
-        weaponDef.icon, 36, 36)
+        weaponDef.icon, iconSize, iconSize)
     if not (ok and icon) then return end
+    icon._battleTransient = true
 
-    -- position: offset from attacker (hand position approximation)
+    if melee then
+        -- Weapon art is consistently drawn from handle (lower-left) to tip
+        -- (upper-right). Anchor near the handle so rotation stays in the fist.
+        icon.anchorX = 0.18
+        icon.anchorY = 0.82
+        icon._melee = true
+    end
     local offsetX = (attackerSprite.team == "player") and 24 or -24
     icon.x = attackerSprite.x + offsetX
     icon.y = attackerSprite.y - 10
@@ -567,15 +636,45 @@ local function attachWeaponToSprite(attackerSprite, weaponDef)
     return icon
 end
 
+local function positionMeleeWeapon(icon, attackVisual, team, frame)
+    if not icon or not icon.removeSelf or not icon._melee then return false end
+    if not attackVisual or not attackVisual.removeSelf then return false end
+
+    local grip
+    if team == "player" then
+        grip = {
+            { x = 0.46, y = 0.08, rotation = -45 },
+            { x = 0.13, y = 0.60, rotation = 82 },
+            { x = 0.13, y = 0.66, rotation = 125 },
+        }
+    else
+        grip = {
+            { x = 0.42, y = 0.12, rotation = -45 },
+            { x = 0.64, y = 0.66, rotation = 82 },
+            { x = 0.68, y = 0.69, rotation = 125 },
+        }
+    end
+
+    local pose = grip[math.max(1, math.min(3, frame or 1))]
+    local visualWidth = attackVisual._displayWidth
+        or attackVisual.contentWidth or attackVisual.width
+    local visualHeight = attackVisual._displayHeight
+        or attackVisual.contentHeight or attackVisual.height
+    icon.x = attackVisual.x + (pose.x - 0.5) * visualWidth
+    icon.y = attackVisual.y + (pose.y - 0.5) * visualHeight
+    icon.rotation = pose.rotation
+    icon:toFront()
+    return true
+end
+
 local function detachWeaponFromSprite()
     if weaponHUD.floatingIcon and weaponHUD.floatingIcon.removeSelf then
-        transition.to(weaponHUD.floatingIcon, {
+        local icon = weaponHUD.floatingIcon
+        weaponHUD.floatingIcon = nil
+        transition.to(icon, {
             alpha = 0, time = 120,
             onComplete = function()
-                if weaponHUD.floatingIcon and weaponHUD.floatingIcon.removeSelf then
-                    weaponHUD.floatingIcon:removeSelf()
-                    weaponHUD.floatingIcon = nil
-                end
+                if icon and icon.removeSelf then icon:removeSelf() end
             end
         })
     end
@@ -588,6 +687,272 @@ local function slideTo(sprite, x, y, time, onComplete)
     if not sprite then return end
     transition.to(sprite, { x=x, y=y, time=scaledTime(time),
         transition=easing.inOutQuad, onComplete=onComplete })
+end
+
+local STREET_BRAWLER_ANIM = {
+    run_front = {
+        path = "assets/sprites/characters/street_brawler/run_front_sheet.png",
+        columns = 4,
+        rows = 2,
+        frameCount = 8,
+    },
+    run_rear = {
+        path = "assets/sprites/characters/street_brawler/run_rear_sheet.png",
+        columns = 4,
+        rows = 2,
+        frameCount = 8,
+    },
+    attack = {
+        path = "assets/sprites/characters/street_brawler/attack_sheet.png",
+        columns = 3,
+        rows = 2,
+        frameCount = 6,
+    },
+    melee_attack = {
+        path = "assets/sprites/characters/street_brawler/melee_attack_sheet.png",
+        columns = 3,
+        rows = 2,
+        frameCount = 6,
+    },
+    weapon_idle = {
+        path = "assets/sprites/characters/street_brawler/weapon_idle_sheet.png",
+        columns = 2,
+        rows = 1,
+        frameCount = 2,
+    },
+}
+
+-- Opaque-pixel measurements from the idle art and normalized animation cells.
+-- Scaling by visible height (instead of PNG canvas size) keeps the animated
+-- character at the same body scale as the original idle pose.
+local STREET_BRAWLER_METRICS = {
+    front = {
+        idleHeight = 0.9300,
+        idleBottom = 0.96498,
+        run = { height = 0.8945, bottom = 0.9650 },
+        attack = { height = 0.8920, bottom = 0.96354 },
+        melee_attack = { height = 0.8246, bottom = 0.96962 },
+        weapon_idle = { height = 0.90365, bottom = 0.96875 },
+    },
+    rear = {
+        idleHeight = 0.9270,
+        idleBottom = 0.97967,
+        run = { height = 0.8968, bottom = 0.9650 },
+        attack = { height = 0.8920, bottom = 0.96354 },
+        melee_attack = { height = 0.8247, bottom = 0.96962 },
+        weapon_idle = { height = 0.90625, bottom = 0.97135 },
+    },
+}
+
+local function getStreetBrawlerSheet(name)
+    if streetBrawlerSheets[name] then return streetBrawlerSheets[name] end
+    local def = STREET_BRAWLER_ANIM[name]
+    if not def or not resourceExists(def.path) then return nil end
+    local sheet = graphics.newImageSheet(def.path, {
+        width = 256,
+        height = 384,
+        numFrames = def.frameCount,
+        sheetContentWidth = 256 * def.columns,
+        sheetContentHeight = 384 * def.rows,
+    })
+    streetBrawlerSheets[name] = sheet
+    return sheet
+end
+
+local function sizeStreetBrawlerVisual(visual, sprite, animationName, facingOverride)
+    local idleFacing = sprite.team == "player" and "rear" or "front"
+    local animationFacing = facingOverride or idleFacing
+    local idleMetrics = STREET_BRAWLER_METRICS[idleFacing]
+    local animation = STREET_BRAWLER_METRICS[animationFacing][animationName]
+    if not animation then return end
+
+    local frameHeight = 384
+    local scale = ((sprite.height or 64) * idleMetrics.idleHeight)
+        / (frameHeight * animation.height)
+    visual.xScale = scale
+    visual.yScale = scale
+    visual._displayWidth = 256 * scale
+    visual._displayHeight = frameHeight * scale
+
+    -- Align the lowest opaque pixel with the idle pose's lowest opaque pixel.
+    local idleBottomOffset = (sprite.height or 64)
+        * (idleMetrics.idleBottom - 0.5)
+    local animationBottomOffset = frameHeight * scale
+        * (animation.bottom - 0.5)
+    visual._logicalYOffset = idleBottomOffset - animationBottomOffset
+end
+
+local function isAnimatedStreetBrawler(sprite)
+    return sprite
+        and not sprite.petId
+        and (sprite.skinId or "street_brawler") == "street_brawler"
+end
+
+setStreetBrawlerIdleVisible = function(sprite, visible)
+    if not sprite then return end
+    local idleVisual = sprite._weaponIdleVisual
+    local heldWeapon = sprite._weaponIdleIcon
+    if idleVisual and idleVisual.removeSelf then
+        idleVisual.alpha = visible and 1 or 0
+    end
+    if heldWeapon and heldWeapon.removeSelf then
+        heldWeapon.alpha = visible and 1 or 0
+    end
+    if visible then
+        sprite.alpha = idleVisual and idleVisual.removeSelf and 0 or 1
+    else
+        sprite.alpha = 0
+    end
+end
+
+local function clearStreetBrawlerWeaponIdle(sprite)
+    if not sprite then return end
+    if sprite._weaponIdleVisual and sprite._weaponIdleVisual.removeSelf then
+        sprite._weaponIdleVisual:removeSelf()
+    end
+    if sprite._weaponIdleIcon and sprite._weaponIdleIcon.removeSelf then
+        sprite._weaponIdleIcon:removeSelf()
+    end
+    sprite._weaponIdleVisual = nil
+    sprite._weaponIdleIcon = nil
+    sprite.alpha = 1
+end
+
+local function refreshStreetBrawlerWeaponIdle(sprite, weaponDef)
+    clearStreetBrawlerWeaponIdle(sprite)
+    if not isAnimatedStreetBrawler(sprite) or not isMeleeWeapon(weaponDef) then
+        return
+    end
+
+    local sheet = getStreetBrawlerSheet("weapon_idle")
+    if not sheet then return end
+    local facing = sprite.team == "player" and "rear" or "front"
+    local sourceFrame = facing == "rear" and 2 or 1
+    local visual = display.newSprite(battleRoot, sheet, {
+        {
+            name = "armed_idle",
+            frames = { sourceFrame },
+            time = 1,
+            loopCount = 1,
+        },
+    })
+    sizeStreetBrawlerVisual(visual, sprite, "weapon_idle", facing)
+    visual.x = sprite.x
+    visual.y = sprite.y + (visual._logicalYOffset or 0)
+    visual:setFrame(1)
+    visual:toFront()
+
+    local iconSize = meleeWeaponDisplaySize(weaponDef)
+    local ok, icon = pcall(display.newImageRect, battleRoot,
+        weaponDef.icon, iconSize, iconSize)
+    if ok and icon then
+        icon.anchorX = 0.18
+        icon.anchorY = 0.82
+        local grip = facing == "rear"
+            and { x = 0.85, y = 0.64 }
+            or { x = 0.18, y = 0.64 }
+        icon.x = visual.x + (grip.x - 0.5) * visual._displayWidth
+        icon.y = visual.y + (grip.y - 0.5) * visual._displayHeight
+        -- Enemy/front points up-left; player/rear points up-right.
+        icon.rotation = facing == "rear" and 0 or -90
+        icon:toFront()
+    end
+
+    sprite._weaponIdleVisual = visual
+    sprite._weaponIdleIcon = ok and icon or nil
+    setStreetBrawlerIdleVisible(sprite, true)
+end
+
+local function makeStreetBrawlerRunVisual(sprite, returningHome)
+    if not isAnimatedStreetBrawler(sprite) then return nil end
+    local facing
+    if returningHome then
+        facing = sprite.team == "player" and "front" or "rear"
+    else
+        facing = sprite.team == "player" and "rear" or "front"
+    end
+    local name = "run_" .. facing
+    local sheet = getStreetBrawlerSheet(name)
+    if not sheet then return nil end
+
+    local visual = display.newSprite(battleRoot, sheet, {
+        {
+            name = "run",
+            start = 1,
+            count = 8,
+            time = scaledTime(attackPacedTime(440)),
+            loopCount = 0,
+        },
+    })
+    sizeStreetBrawlerVisual(visual, sprite, "run", facing)
+    visual.x = sprite.x
+    visual.y = sprite.y + visual._logicalYOffset
+    visual._battleTransient = true
+    visual:play()
+    visual:toFront()
+    setStreetBrawlerIdleVisible(sprite, false)
+    return visual
+end
+
+local function makeStreetBrawlerAttackVisual(sprite, x, y, attackStyle)
+    if not isAnimatedStreetBrawler(sprite) then return nil end
+    local sheetName
+    if attackStyle == "melee" then
+        sheetName = "melee_attack"
+    elseif attackStyle == "unarmed" then
+        sheetName = "attack"
+    else
+        -- Ranged poses intentionally remain separate from punch/melee.
+        return nil
+    end
+    local sheet = getStreetBrawlerSheet(sheetName)
+    if not sheet then return nil end
+
+    local firstFrame = sprite.team == "player" and 4 or 1
+    local visual = display.newSprite(battleRoot, sheet, {
+        {
+            name = "attack",
+            frames = { firstFrame, firstFrame + 1, firstFrame + 2 },
+            time = scaledTime(attackPacedTime(360)),
+            loopCount = 1,
+        },
+    })
+    sizeStreetBrawlerVisual(visual, sprite, sheetName)
+    visual.x = x or sprite.x
+    visual.y = (y or sprite.y) + visual._logicalYOffset
+    visual._battleTransient = true
+    visual:setFrame(1)
+    visual:toFront()
+    setStreetBrawlerIdleVisible(sprite, false)
+    return visual
+end
+
+local function removeAttackVisual(visual)
+    if visual and visual.removeSelf then visual:removeSelf() end
+end
+
+local function clearBattleTransientVisuals(group)
+    if not group or not group.numChildren then return end
+    for i = group.numChildren, 1, -1 do
+        local child = group[i]
+        if child then
+            if child._battleTransient then
+                if child.removeSelf then child:removeSelf() end
+            elseif child.numChildren then
+                clearBattleTransientVisuals(child)
+            end
+        end
+    end
+    weaponHUD.floatingIcon = nil
+end
+
+local function moveAttackSprite(sprite, visual, x, y, time, onComplete)
+    if visual and visual.removeSelf then
+        slideTo(sprite, x, y, time)
+        slideTo(visual, x, y + (visual._logicalYOffset or 0), time, onComplete)
+    else
+        slideTo(sprite, x, y, time, onComplete)
+    end
 end
 
 local function buildEnemyWeaponHUD(root, enemy)
@@ -673,11 +1038,34 @@ local function flashBattleBorder()
 end
 
 local function dodgeMove(sprite)
-    if not sprite then return end
-    transition.to(sprite, { x=sprite.x+14, time=scaledTime(70),
-        onComplete=function()
-            transition.to(sprite, { x=sprite.x-14, time=scaledTime(70) })
-        end })
+    if not sprite or not sprite.removeSelf then return end
+
+    -- Enemy-side units occupy the top half and retreat upward.
+    -- Player-side units occupy the bottom half and retreat downward.
+    local dodgeDistance = sprite.team == "enemy" and -28 or 28
+
+    local function animatePart(part)
+        if not part or not part.removeSelf then return end
+        local startY = part.y
+        transition.to(part, {
+            y = startY + dodgeDistance,
+            time = scaledTime(100),
+            transition = easing.outQuad,
+            onComplete = function()
+                if part and part.removeSelf then
+                    transition.to(part, {
+                        y = startY,
+                        time = scaledTime(150),
+                        transition = easing.inOutQuad,
+                    })
+                end
+            end,
+        })
+    end
+
+    animatePart(sprite)
+    animatePart(sprite._weaponIdleVisual)
+    animatePart(sprite._weaponIdleIcon)
 end
 
 local function spawnDamageText(targetSprite, text, color)
@@ -687,6 +1075,7 @@ local function spawnDamageText(targetSprite, text, color)
         x=targetSprite.x, y=targetSprite.y-120,
         font=ui.FONT_BOLD, fontSize=24, align="center"
     })
+    d._battleTransient = true
     d:setFillColor(unpack(color))
     transition.to(d, { y=d.y-12, alpha=0, time=scaledTime(950),
         onComplete=function() if d and d.removeSelf then d:removeSelf() end end })
@@ -694,55 +1083,115 @@ end
 
 -------------------------------------------------
 -- ATTACK ANIMATION
--- Weapon floats in attacker's hand during the slide.
+-- Street Brawler uses run, anticipation, impact, and recovery frames.
+-- Other characters and pets retain the safe static-sprite fallback.
 -------------------------------------------------
-performAttack = function(attackerSprite, targetSprite, weaponDef, onImpact)
+performAttack = function(attackerSprite, targetSprite, weaponDef, onImpact, returnDelay)
     if not attackerSprite or not targetSprite then return end
 
     local centerX   = display.contentCenterX
     local centerY   = display.contentCenterY
     local approachY = attackerSprite.team=="player" and (centerY-60) or (centerY+60)
     local attackerPetId = attackerSprite.petId
+    local runVisual = makeStreetBrawlerRunVisual(attackerSprite)
     if attackerPetId then
-        setSprite(attackerSprite, petAssets.attack(attackerPetId, attackerSprite.team))
+        setPetPoseOrIdle(
+            attackerSprite, attackerPetId, attackerSprite.team, "attack")
     end
 
-    -- attach weapon before moving
-    local floatIcon = attachWeaponToSprite(attackerSprite, weaponDef)
+    moveAttackSprite(attackerSprite, runVisual, centerX, approachY,
+        attackPacedTime(220), function()
+        local attackX = attackerSprite.team=="enemy"
+            and (targetSprite.x + math.random(-12,12))
+            or targetSprite.x
+        local stopGap = math.max(
+            22,
+            ((attackerSprite.height or 64) + (targetSprite.height or 64)) * 0.22)
+        local attackY = targetSprite.y
+            + (attackerSprite.team == "player" and stopGap or -stopGap)
 
-    slideTo(attackerSprite, centerX, approachY, 160, function()
+        moveAttackSprite(attackerSprite, runVisual, attackX, attackY,
+            attackPacedTime(170), function()
+            removeAttackVisual(runVisual)
+            runVisual = nil
 
-        -- keep weapon glued to sprite while sliding
-        if floatIcon and floatIcon.removeSelf then
-            local offsetX = (attackerSprite.team=="player") and 24 or -24
-            floatIcon.x = attackerSprite.x + offsetX
-            floatIcon.y = attackerSprite.y - 10
-        end
+            -- The first attack frame is the raised-hand anticipation pose.
+            local meleeAttack = isMeleeWeapon(weaponDef)
+            local attackStyle = meleeAttack and "melee"
+                or ((not weaponDef or not weaponDef.icon) and "unarmed" or "ranged")
+            local attackVisual = makeStreetBrawlerAttackVisual(
+                attackerSprite, attackX, attackY, attackStyle)
+            if not attackVisual then attackerSprite.alpha = 1 end
+            local floatIcon = attachWeaponToSprite(attackerSprite, weaponDef)
+            if not positionMeleeWeapon(
+                floatIcon, attackVisual, attackerSprite.team, 1)
+                and floatIcon and floatIcon.removeSelf
+            then
+                floatIcon.x = attackX + ((attackerSprite.team=="player") and 24 or -24)
+                floatIcon.y = attackY - 10
+                floatIcon:toFront()
+            end
 
-        trackDelay(80, function()
-            local attackX = attackerSprite.team=="enemy"
-                and (targetSprite.x + math.random(-12,12))
-                or  targetSprite.x
-
-            slideTo(attackerSprite, attackX, targetSprite.y, 120, function()
-                -- snap weapon to impact position
-                if floatIcon and floatIcon.removeSelf then
-                    floatIcon.x = attackerSprite.x + ((attackerSprite.team=="player") and 24 or -24)
-                    floatIcon.y = attackerSprite.y - 10
+            trackDelay(attackPacedTime(180), function()
+                if attackVisual and attackVisual.removeSelf then
+                    attackVisual:setFrame(2)
                 end
-
+                positionMeleeWeapon(
+                    floatIcon, attackVisual, attackerSprite.team, 2)
                 if onImpact then onImpact() end
 
-                slideTo(attackerSprite, attackerSprite.homeX, attackerSprite.homeY, 200,
-                    function()
-                        if attackerPetId then
-                            setSprite(attackerSprite, petAssets.battle(attackerPetId, attackerSprite.team))
-                        end
+                trackDelay(attackPacedTime(110), function()
+                    if attackVisual and attackVisual.removeSelf then
+                        attackVisual:setFrame(3)
+                    end
+                    positionMeleeWeapon(
+                        floatIcon, attackVisual, attackerSprite.team, 3)
+
+                    trackDelay(attackPacedTime(90), function()
+                        local function returnHome()
+                        removeAttackVisual(attackVisual)
+                        -- Release the composited weapon with the follow-through
+                        -- instead of leaving it behind while the unit runs home.
                         detachWeaponFromSprite()
+                        local returnVisual = makeStreetBrawlerRunVisual(
+                            attackerSprite, true)
+                        moveAttackSprite(
+                            attackerSprite,
+                            returnVisual,
+                            centerX,
+                            approachY,
+                            attackPacedTime(210),
+                            function()
+                                moveAttackSprite(
+                                    attackerSprite,
+                                    returnVisual,
+                                    attackerSprite.homeX,
+                                    attackerSprite.homeY,
+                                    attackPacedTime(230),
+                                    function()
+                                        removeAttackVisual(returnVisual)
+                                        setStreetBrawlerIdleVisible(
+                                            attackerSprite, true)
+                                        if attackerPetId then
+                                            setPetPoseOrIdle(
+                                                attackerSprite,
+                                                attackerPetId,
+                                                attackerSprite.team,
+                                                "battle")
+                                        end
+                                            end)
+                                    end)
+                        end
+                        if returnDelay and returnDelay > 0 then
+                            trackDelay(returnDelay, returnHome)
+                        else
+                            returnHome()
+                        end
                     end)
             end)
         end)
     end)
+end)
 end
 
 -------------------------------------------------
@@ -757,31 +1206,81 @@ local SPELL_BANNERS = {
     call_a_friend       = { name="Call a Friend",    sub="An ally joins the fight!" },
     call_a_friend_leave = { name="Friend Left",      sub="Your ally has departed." },
     ultimate_trainer    = { name="Ultimate Trainer", sub="3rd pet slot unlocked!" },
-    weapon_knock        = { name="Weapon Knocked!",  sub="Forced weapon rotation!" },
 }
 
-local function shiftCounterStance(casterSide)
-    local key = (casterSide == "enemy") and "enemy" or "player"
-    local sprite = actorSprites[key]
-    if not sprite or not sprite.removeSelf then return end
-
-    local step = 20
-    local minPlayerY = display.contentCenterY + 36
-    local maxEnemyY = display.contentCenterY - 36
-    local newY = sprite.homeY + ((key == "player") and -step or step)
-
-    if key == "player" then
-        newY = math.max(minPlayerY, newY)
-    else
-        newY = math.min(maxEnemyY, newY)
+local function recoilForCounter(sprite, onComplete)
+    if not sprite or not sprite.removeSelf then
+        if onComplete then onComplete() end
+        return
     end
 
-    sprite.homeY = newY
+    local recoilDistance = sprite.team == "enemy" and -30 or 30
+    local idleVisual = sprite._weaponIdleVisual
+    local heldWeapon = sprite._weaponIdleIcon
+    local idleVisualY = idleVisual and idleVisual.y
+    local heldWeaponY = heldWeapon and heldWeapon.y
+
+    local function moveVisiblePart(part)
+        if part and part.removeSelf then
+            transition.to(part, {
+                y = part.y + recoilDistance,
+                time = scaledTime(140),
+                transition = easing.outQuad,
+            })
+        end
+    end
+
+    moveVisiblePart(idleVisual)
+    moveVisiblePart(heldWeapon)
     transition.to(sprite, {
-        y = newY,
-        time = scaledTime(150),
+        y = sprite.y + recoilDistance,
+        time = scaledTime(140),
         transition = easing.outQuad,
+        onComplete = function()
+            -- The run visual starts from the recoiled base sprite. Reset the
+            -- hidden idle composition so it is aligned when the unit gets home.
+            if isAnimatedStreetBrawler(sprite) then
+                setStreetBrawlerIdleVisible(sprite, false)
+            else
+                sprite.alpha = 1
+            end
+            if idleVisual and idleVisual.removeSelf and idleVisualY then
+                idleVisual.y = idleVisualY
+            end
+            if heldWeapon and heldWeapon.removeSelf and heldWeaponY then
+                heldWeapon.y = heldWeaponY
+            end
+            if onComplete then onComplete() end
+        end,
     })
+end
+
+local function playCounterSequence(entry, incomingAttacker, counterer)
+    if not incomingAttacker or not counterer then return end
+
+    local info = SPELL_BANNERS.counter
+    spawnSpellBanner(info.name, info.sub)
+    recoilForCounter(counterer, function()
+        local counterWeapon = getWeaponDefForAttacker({
+            attacker = entry.casterUnit,
+            weaponId = entry.weaponId,
+        })
+        performAttack(counterer, incomingAttacker, counterWeapon, function()
+            flash(incomingAttacker)
+            spawnDamageText(
+                incomingAttacker,
+                tostring(entry.damage or 0),
+                {0.45, 0.9, 1.0})
+            if incomingAttacker.team == "player" then
+                currentPlayerHp = math.max(
+                    entry.targetTeamHp or entry.targetHp or 0, 0)
+            else
+                currentEnemyHp = math.max(
+                    entry.targetTeamHp or entry.targetHp or 0, 0)
+            end
+            updateHpBars()
+        end)
+    end)
 end
 
 local function spawnCriticalCue(casterSide)
@@ -791,6 +1290,7 @@ local function spawnCriticalCue(casterSide)
 
     local ok, fx = pcall(display.newImageRect, battleRoot, "assets/sprites/skills/critical.png", 120, 56)
     if not (ok and fx) then return end
+    fx._battleTransient = true
     fx.x = sprite.x
     fx.y = sprite.y + ((key == "player") and 44 or -44)
     fx.alpha = 0
@@ -820,6 +1320,7 @@ local function playLastStandSequence(casterSide)
     trackDelay(200, function()
         local ok, reviveFx = pcall(display.newImageRect, battleRoot, "assets/sprites/skills/revive.png", 110, 110)
         if ok and reviveFx then
+            reviveFx._battleTransient = true
             reviveFx.x = sprite.x
             reviveFx.y = sprite.y
             reviveFx.alpha = 0
@@ -854,6 +1355,7 @@ end
 local function spawnSpellBanner(spellName, subtitle)
     local bg = display.newRoundedRect(battleRoot,
         display.contentCenterX, display.contentCenterY-40, 220, 54, 10)
+    bg._battleTransient = true
     bg:setFillColor(0.05,0.08,0.22,0.92); bg.strokeWidth=2
     bg:setStrokeColor(0.3,0.7,1.0,0.9); bg.alpha=0
 
@@ -861,6 +1363,7 @@ local function spawnSpellBanner(spellName, subtitle)
         text=string.upper(spellName),
         x=display.contentCenterX, y=display.contentCenterY-46,
         font=ui.FONT_BOLD, fontSize=18, align="center" })
+    nt._battleTransient = true
     nt:setFillColor(0.4,0.9,1.0); nt.alpha=0
 
     local st = nil
@@ -868,6 +1371,7 @@ local function spawnSpellBanner(spellName, subtitle)
         st = display.newText({ parent=battleRoot, text=subtitle,
             x=display.contentCenterX, y=display.contentCenterY-28,
             font=ui.FONT, fontSize=11, align="center" })
+        st._battleTransient = true
         st:setFillColor(0.8,0.9,1.0); st.alpha=0
     end
 
@@ -897,9 +1401,7 @@ local function handleSpell(entry)
     end
     spawnSpellBanner(info.name, sub)
 
-    if entry.spell=="counter" then
-        shiftCounterStance(entry.caster)
-    elseif entry.spell=="wrath" then
+    if entry.spell=="wrath" then
         spawnCriticalCue(entry.caster)
     elseif entry.spell=="last_stand" then
         playLastStandSequence(entry.caster)
@@ -941,7 +1443,7 @@ local function handleSpell(entry)
     end
 end
 
-local function handleHit(entry)
+local function handleHit(entry, counterEntry)
     local attackerSprite = actorSprites[normalizeActorId(entry.attacker)]
     local targetSprite   = actorSprites[normalizeActorId(entry.target)]
     local targetId       = normalizeActorId(entry.target)
@@ -954,6 +1456,7 @@ local function handleHit(entry)
     local weaponDefForAnim = getWeaponDefForAttacker(entry)
 
     performAttack(attackerSprite, targetSprite, weaponDefForAnim, function()
+        setStreetBrawlerIdleVisible(targetSprite, false)
         if targetSprite.type == "leader" and targetSprite.team == "enemy" then
             setSprite(targetSprite, "assets/sprites/characters/"..(targetSprite.skinId or opponent.visualId or "street_brawler").."/battle_hit.png")
         elseif targetSprite.type == "leader" and targetSprite.team == "player" then
@@ -966,12 +1469,10 @@ local function handleHit(entry)
             setSprite(targetSprite, "assets/sprites/characters/street_brawler/rear_hit.png")
         else
             local petId = canonicalPetId(entry.target)
-            if targetSprite.team=="player" then
-                setSprite(targetSprite, petAssets.hit(petId, "player"))
-            else
-                setSprite(targetSprite, petAssets.hit(petId, "enemy"))
-            end
+            setPetPoseOrIdle(
+                targetSprite, petId, targetSprite.team, "hit")
         end
+        targetSprite.alpha = 1
 
         flash(targetSprite)
         spawnDamageText(targetSprite, dmgText, color)
@@ -991,6 +1492,12 @@ local function handleHit(entry)
             end
         end
         updateHpBars()
+        if counterEntry then
+            playCounterSequence(
+                counterEntry,
+                attackerSprite,
+                targetSprite)
+        end
 
         trackDelay(220, function()
             if targetSprite.type == "leader" and targetSprite.team == "enemy" then
@@ -1005,14 +1512,14 @@ local function handleHit(entry)
                 setSprite(targetSprite, "assets/sprites/characters/street_brawler/rear.png")
             else
                 local petId = canonicalPetId(entry.target)
-                if targetSprite.team=="player" then
-                    setSprite(targetSprite, petAssets.battle(petId, "player"))
-                else
-                    setSprite(targetSprite, petAssets.battle(petId, "enemy"))
-                end
+                setPetPoseOrIdle(
+                    targetSprite, petId, targetSprite.team, "battle")
+            end
+            if not counterEntry then
+                setStreetBrawlerIdleVisible(targetSprite, true)
             end
         end)
-    end)
+    end, counterEntry and attackPacedTime(900) or nil)
 end
 
 local function handleDeath(entry)
@@ -1030,7 +1537,7 @@ local function handleDeath(entry)
     local petId = canonicalPetId(entry.unit)
     if petId and petId ~= entry.unit then
         sprite.alpha = 0.3
-        setSprite(sprite, petAssets.dead(petId, sprite.team))
+        setPetPoseOrIdle(sprite, petId, sprite.team, "dead")
         sprite.alpha = 1
         return
     end
@@ -1108,18 +1615,18 @@ local function handleDodge(entry)
     local targetSprite = actorSprites[normalizeActorId(entry.target)]
     if not targetSprite then return end
     if not attackerSprite then
+        spawnDamageText(targetSprite, "DODGED", {0.6,0.9,1})
         dodgeMove(targetSprite)
-        spawnDamageText(targetSprite, "MISS", {0.6,0.9,1})
         return
     end
 
     performAttack(attackerSprite, targetSprite, getWeaponDefForAttacker(entry), function()
+        spawnDamageText(targetSprite, "DODGED", {0.6,0.9,1})
         dodgeMove(targetSprite)
-        spawnDamageText(targetSprite, "MISS", {0.6,0.9,1})
     end)
 end
 
--- weapon_switch: just update icon and name, nothing else
+-- weapon_switch: refresh the weapon held by the idle character.
 local function handleWeaponSwitch(entry)
     if not entry.weapon then return end
 
@@ -1136,12 +1643,12 @@ local function handleWeaponSwitch(entry)
         enemyWeaponHUD.nameLabel.text = entry.weapon.name
     end
 
-end
+    local sprite = actorSprites[normalizeActorId(entry.unit)]
+    if sprite and entry.weapon.id then
+        local items = require("utils.items")
+        refreshStreetBrawlerWeaponIdle(sprite, items[entry.weapon.id])
+    end
 
--- weapon_knock: crit or counter forced early rotation
-local function handleWeaponKnock(entry)
-    spawnSpellBanner("Weapon Knocked!", "Forced rotation!")
-    updateWeaponHUD(player)
 end
 
 local function buildPlaybackControls(root)
@@ -1192,6 +1699,17 @@ finishBattle = function(result)
     for _, t in ipairs(activeTimers) do pcall(function() timer.cancel(t) end) end
     activeTimers = {}
     transition.cancel()
+    clearBattleTransientVisuals(battleRoot)
+
+    local resetSprites = {}
+    for _, sprite in pairs(actorSprites or {}) do
+        if sprite and sprite.removeSelf and not resetSprites[sprite] then
+            resetSprites[sprite] = true
+            sprite.x = sprite.homeX or sprite.x
+            sprite.y = sprite.homeY or sprite.y
+        end
+    end
+
     applyEndBattleSprites(result)
     flashBattleBorder()
     pendingBattleResult = result
@@ -1290,17 +1808,39 @@ playCombatLog = function(result)
         local entry = log[index]
         if not entry then finishBattle(result); return end
 
-        if     entry.type=="hit"           then handleHit(entry)
-        elseif entry.type=="death"         then handleDeath(entry)
+        local pairedCounter
+        if entry.type == "hit" then
+            local nextEntry = log[index + 1]
+            if nextEntry
+                and nextEntry.type == "spell"
+                and nextEntry.spell == "counter"
+                and nextEntry.target == entry.attacker
+                and nextEntry.casterUnit == entry.target
+            then
+                pairedCounter = nextEntry
+                index = index + 1
+            end
+            handleHit(entry, pairedCounter)
+        elseif entry.type=="death"         then
+            handleDeath(entry)
+            if entry.teamDefeated then
+                -- The lethal attack has already finished returning home.
+                -- Declare the result now so winner and loser poses appear
+                -- together, with no weapon-rotation or end-log pause.
+                finishBattle(result)
+                return
+            end
         elseif entry.type=="dodge"         then handleDodge(entry)
         elseif entry.type=="spell"         then handleSpell(entry)
         elseif entry.type=="weapon_switch" then handleWeaponSwitch(entry)
-        elseif entry.type=="weapon_knock"  then handleWeaponKnock(entry)
         end
 
         index = index + 1
-        local delay = 700
-        if entry.type=="spell" then
+        local isMovementAction = entry.type == "hit" or entry.type == "dodge"
+        local delay = isMovementAction and attackPacedTime(1280) or 700
+        if pairedCounter then
+            delay = attackPacedTime(2500)
+        elseif entry.type=="spell" then
             if entry.spell=="wrath" then
                 delay = 260
             elseif entry.spell=="counter" or entry.spell=="last_stand" then
@@ -1741,6 +2281,7 @@ local function buildBattle(sceneGroup)
         placeUnit(pSpr, playerX, playerY, "player")
         pSpr.type = "leader"
         pSpr.skinId = skin
+        pSpr.weaponOwner = player
         attachUnitHpBar(pSpr, player.hp or maxPlayerHp, "player")
         actorSprites["player"]        = pSpr
         actorSprites["player:leader"] = pSpr
@@ -1755,13 +2296,15 @@ local function buildBattle(sceneGroup)
             placeUnit(dSpr, x, y, "player")
             dSpr.type = "leader"
             dSpr.skinId = skinId
+            dSpr.weaponOwner = defender
             attachUnitHpBar(dSpr, defender.hp or player.hp, "player")
             actorSprites[defender.id or ("player:leader:" .. tostring(i + 1))] = dSpr
         end
     end
 
     -- ENEMY SPRITE
-    local eSkin = opponent.visualId or "street_brawler"
+    local eSkin = opponent.isBot and "street_brawler"
+        or opponent.visualId or "street_brawler"
     local enemyX, enemyY, enemyScale = teamLeaderSlot("enemy", 1)
     local okE, eSpr = pcall(display.newImageRect, battleRoot,
         "assets/sprites/characters/"..eSkin.."/battle.png", 24 * enemyScale, 40 * enemyScale)
@@ -1769,6 +2312,7 @@ local function buildBattle(sceneGroup)
         placeUnit(eSpr, enemyX, enemyY, "enemy")
         eSpr.type = "leader"
         eSpr.skinId = eSkin
+        eSpr.weaponOwner = opponent
         attachUnitHpBar(eSpr, opponent.hp, "enemy")
         actorSprites["enemy"]        = eSpr
         actorSprites["enemy:leader"] = eSpr
@@ -1778,13 +2322,15 @@ local function buildBattle(sceneGroup)
         local x, y, scale = teamLeaderSlot("enemy", i + 1)
         local w = 24 * scale
         local h = 40 * scale
-        local skinId = defender.visualId or defender.skinId or "street_brawler"
+        local skinId = opponent.isBot and "street_brawler"
+            or defender.visualId or defender.skinId or "street_brawler"
         local okD, dSpr = pcall(display.newImageRect, battleRoot,
             "assets/sprites/characters/"..skinId.."/battle.png", w, h)
         if okD and dSpr then
             placeUnit(dSpr, x, y, "enemy")
             dSpr.type = "leader"
             dSpr.skinId = skinId
+            dSpr.weaponOwner = defender
             attachUnitHpBar(dSpr, defender.hp or opponent.hp, "enemy")
             actorSprites[defender.id or ("enemy:leader:" .. tostring(i + 1))] = dSpr
         end
@@ -1964,7 +2510,7 @@ local function buildBattle(sceneGroup)
             local slot = petSlot("player", i, def)
             local petW, petH = petDisplayDimensions(def, slot.scale)
             slot.x = clampFormationX(slot.x, petW)
-            local path = petAssets.battle(petId, "player")
+            local path = petAssets.battleWithFallback(petId, "player")
             local okPet, pet = pcall(display.newImageRect, battleRoot,
                 path, petW, petH)
             if okPet and pet then
@@ -1994,7 +2540,7 @@ local function buildBattle(sceneGroup)
             local slot = petSlot("enemy", i, def)
             local petW, petH = petDisplayDimensions(def, slot.scale)
             slot.x = clampFormationX(slot.x, petW)
-            local path = petAssets.battle(petId, "enemy")
+            local path = petAssets.battleWithFallback(petId, "enemy")
             local okPet, pet = pcall(display.newImageRect, battleRoot, path, petW, petH)
             if okPet and pet then
                 placeUnit(pet, slot.x, slot.y, "enemy")
@@ -2016,6 +2562,14 @@ local function buildBattle(sceneGroup)
     end
 
     sendLowerUnitsToFront()
+    local preparedIdle = {}
+    for _, sprite in pairs(actorSprites or {}) do
+        if sprite and sprite.type == "leader" and not preparedIdle[sprite] then
+            preparedIdle[sprite] = true
+            local weaponDef = weapons.getCurrentWeapon(sprite.weaponOwner)
+            refreshStreetBrawlerWeaponIdle(sprite, weaponDef)
+        end
+    end
     if hpBars.enemyBg.group then hpBars.enemyBg.group:toFront() end
     if hpBars.playerBg.group then hpBars.playerBg.group:toFront() end
     if battleBorder and battleBorder.toFront then battleBorder:toFront() end
@@ -2032,8 +2586,6 @@ local function buildBattle(sceneGroup)
         currentIcon  = nil,
         nameLabel    = nil,
     }
-    buildWeaponHUD(battleRoot, player)
-    buildEnemyWeaponHUD(battleRoot, opponent)
     buildPlaybackControls(battleRoot)
 end
 

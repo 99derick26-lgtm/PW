@@ -68,6 +68,9 @@ local DEBUG_ENABLED = false
 local function degToRad(d) return d * math.pi / 180 end
 
 local function iconPath(iconName)
+    if iconName == "arena" then
+        iconName = "fight"
+    end
     if iconName == "squad" or iconName == "tournament" then
         return "assets/sprites/ui/icons/tabs/" .. iconName .. ".png"
     end

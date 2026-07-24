@@ -289,7 +289,6 @@ function combat.runBattle(playerRaw, enemyRaw)
         )
 
         if didKnock then
-            log[#log+1] = { type="weapon_knock", unit=target.id }
             if target.id == player.leader.id then
                 logPlayerWeaponSwitch(newDef, newId)
             elseif target.id == enemy.leader.id then
@@ -483,7 +482,9 @@ function combat.runBattle(playerRaw, enemyRaw)
                             end
                         end
 
-                        -- counter check (leaders only, non-ranged attacks)
+                        -- Counter is appended immediately after the triggering hit
+                        -- so playback can animate both actions as one exchange.
+                        local counterEntry
                         if target.type == "leader" and attacker.type == "leader" then
                             local attackerSide = attacker.side or ((attacker.id == player.leader.id) and "player" or "enemy")
                             local counterSide = target.side or ((target.id == player.leader.id) and "player" or "enemy")
@@ -495,14 +496,21 @@ function combat.runBattle(playerRaw, enemyRaw)
                                 local counterDmg = math.max(math.floor(dmg * 0.5), 1)
                                 attacker.hp = math.max(attacker.hp - counterDmg, 0)
                                 if attacker.hp <= 0 then attacker.alive = false end
-                                log[#log+1] = {
+                                local counterRaw = target.raw
+                                    or (counterSide == "player" and playerRaw or enemyRaw)
+                                local _, counterWeaponId = weapons.getCurrentWeapon(counterRaw)
+                                counterEntry = {
                                     type = "spell",
                                     spell = "counter",
                                     caster = counterSide,
+                                    casterUnit = target.id,
                                     target = attacker.id,
                                     damage = counterDmg,
                                     targetHp = attacker.hp,
+                                    targetTeamHp = counterSide == "player"
+                                        and leaderTeamHp(enemy) or leaderTeamHp(player),
                                     targetDied = not attacker.alive,
+                                    weaponId = counterWeaponId,
                                 }
                             end
                         end
@@ -517,9 +525,14 @@ function combat.runBattle(playerRaw, enemyRaw)
                             targetTeamHp = entry.side == "player" and leaderTeamHp(enemy) or leaderTeamHp(player),
                             weaponId = attacker._currentWeaponId,   -- ← HUD uses this
                         }
+                        if counterEntry then
+                            log[#log+1] = counterEntry
+                        end
 
                         -- ── ACTION ADVANCE: player leader landed a hit ─────
-                        applyWeaponPressure(attacker, target, dmg)
+                        if target.alive and attacker.alive then
+                            applyWeaponPressure(attacker, target, dmg)
+                        end
                         -- ──────────────────────────────────────────────────
 
                         if not target.alive then
@@ -557,7 +570,7 @@ function combat.runBattle(playerRaw, enemyRaw)
                         end
 
                         -- bonus hit (two piece combo)
-                        if bonusHit and target.alive then
+                        if bonusHit and target.alive and attacker.alive then
                             local dmg2, crit2 = dealDamage(attacker, target, 1.0, false)
                             local targetSide = target.side or ((target.id == player.leader.id) and "player" or "enemy")
                             if not target.alive and target.type == "leader" then
@@ -580,7 +593,9 @@ function combat.runBattle(playerRaw, enemyRaw)
                                 isCombo  = true,
                                 weaponId = attacker._currentWeaponId,
                             }
-                            applyWeaponPressure(attacker, target, dmg2)
+                            if target.alive and attacker.alive then
+                                applyWeaponPressure(attacker, target, dmg2)
+                            end
                             if not target.alive then
                                 local defeated = target.type == "leader"
                                     and ((targetSide == "player" and not teamLeaderAlive(player))

@@ -10,6 +10,7 @@ local M = {}
 local items = require("utils.items")
 local stats = require("utils.stats")
 local spells = require("utils.spells")
+local BOT_VISUAL_ID = "street_brawler"
 
 local DIFFICULTY_LEVEL_OFFSET = {
     safe    = -2,
@@ -372,7 +373,8 @@ function M.buildArenaOpponent(player, opts)
     return {
         id = opts.id or bot.name,
         name = opts.name or bot.name,
-        visualId = opts.visualId,
+        visualId = BOT_VISUAL_ID,
+        isBot = true,
         level = bot.level,
         attack = bot.attack,
         defense = bot.defense,

@@ -44,6 +44,16 @@ local ARENA_DIFFICULTIES = {
 }
 
 local ARENA_OPPONENT_COUNT = 8
+local BOT_VISUAL_ID = "street_brawler"
+
+-- Anchor the complete arena header to the visible top of letterboxed screens.
+-- Search, opponent name, and stats all derive from this one panel position.
+local ARENA_TOP_PANEL_TOP = display.screenOriginY + 42
+local ARENA_TOP_PANEL_H = 136
+local ARENA_SEARCH_LABEL_Y = ARENA_TOP_PANEL_TOP + 14
+local ARENA_SEARCH_INPUT_Y = ARENA_TOP_PANEL_TOP + 40
+local ARENA_OPPONENT_NAME_Y = ARENA_TOP_PANEL_TOP + 74
+local ARENA_STATS_Y = ARENA_TOP_PANEL_TOP + 108
 
 local VISUAL_IDS = {
     "corp_enforcer", "corp_enforcer_f",
@@ -86,6 +96,18 @@ local rebuildArenaUI
 local arenaDifficulty = composer.getVariable("arenaDifficulty") or "casual"
 local difficultyPopup
 local showConqueredTargetPopup
+local arenaSearchField
+local arenaSearchButtonLabel
+local runArenaPlayerSearch
+
+local function formatArenaStat(value)
+    local number = math.floor(tonumber(value) or 0)
+    local sign = number < 0 and "-" or ""
+    local digits = tostring(math.abs(number))
+    local formatted = digits:reverse():gsub("(%d%d%d)", "%1,"):reverse()
+    formatted = formatted:gsub("^,", "")
+    return sign .. formatted
+end
 
 local function clearGuildBattleModes()
     composer.setVariable("guildWarBattle", nil)
@@ -367,6 +389,15 @@ local function opponentKey(opp)
     return tostring(opp.id or opp.serverPlayerId or opp.name or "")
 end
 
+local function isBotOpponent(opp)
+    if not opp then return false end
+    if opp.isBot == true or opp.bot == true then return true end
+    local id = tostring(opp.id or opp.serverPlayerId or "")
+    return id:match("^local:") ~= nil
+        or id:match("^bot:") ~= nil
+        or id:match("^bot_") ~= nil
+end
+
 local function buildArenaSession(player, difficultyKey)
     player = player or saveUtil.load()
     difficultyKey = difficultyKey or arenaDifficulty or "casual"
@@ -392,7 +423,8 @@ local function buildArenaSession(player, difficultyKey)
         local idx = math.random(#pool)
         local opp = table.remove(pool, idx)
         opp.id             = "local:" .. tostring(targetLevel) .. ":" .. tostring(i) .. ":" .. tostring(opp.name)
-        opp.visualId       = VISUAL_IDS[math.random(#VISUAL_IDS)]
+        opp.visualId       = BOT_VISUAL_ID
+        opp.isBot          = true
         opp.generatedPets  = nil
         opp.generatedBuild = nil
         opp.targetLevel     = targetLevel
@@ -409,6 +441,14 @@ local function topUpArenaOpponents(session, player)
     local targetLevel = math.max(1, session.targetLevel or ((player.level or 1) + (DIFFICULTY_LEVEL_OFFSET[session.difficulty or arenaDifficulty] or 0)))
     local used = {}
     for _, opp in ipairs(session.opponents) do
+        if isBotOpponent(opp) then
+            opp.isBot = true
+            opp.visualId = BOT_VISUAL_ID
+            if opp.generatedBuild then
+                opp.generatedBuild.visualId = BOT_VISUAL_ID
+                opp.generatedBuild.isBot = true
+            end
+        end
         local key = opponentKey(opp)
         if key and key ~= "" then used[key] = true end
     end
@@ -421,7 +461,7 @@ local function topUpArenaOpponents(session, player)
             name = base.name .. " " .. tostring(targetLevel),
             basePower = base.basePower,
             pets = base.pets,
-            visualId = VISUAL_IDS[((idx - 1) % #VISUAL_IDS) + 1],
+            visualId = BOT_VISUAL_ID,
             generatedPets = nil,
             generatedBuild = nil,
             targetLevel = targetLevel,
@@ -456,6 +496,11 @@ end
 
 local function ensureGeneratedBuild(player, opp)
     if opp.generatedBuild then
+        if isBotOpponent(opp) then
+            opp.visualId = BOT_VISUAL_ID
+            opp.generatedBuild.visualId = BOT_VISUAL_ID
+            opp.generatedBuild.isBot = true
+        end
         return opp.generatedBuild
     end
 
@@ -466,7 +511,7 @@ local function ensureGeneratedBuild(player, opp)
     opp.generatedBuild = enemyGen.buildArenaOpponent(player, {
         id = opp.name,
         name = opp.name,
-        visualId = opp.visualId,
+        visualId = isBotOpponent(opp) and BOT_VISUAL_ID or opp.visualId,
         level = enemyLevel,
         difficulty = diff,
         bias = bias,
@@ -507,6 +552,10 @@ local function buildServerOpponent(serverPlayer, localPlayer)
         currentWeaponIndex = snap.currentWeaponIndex or 1,
         weaponUsesLeft = snap.weaponUsesLeft,
     }
+    if serverPlayer.bot == true then
+        opp.visualId = BOT_VISUAL_ID
+        opp.isBot = true
+    end
     if serverPlayer.bot and not hasAnyLoadoutData(opp) then
         local generated = enemyGen.buildArenaOpponent(localPlayer, {
             id = opp.id,
@@ -675,7 +724,76 @@ local function serverPlayerToArenaEntry(serverPlayer, localPlayer)
     opp.generatedPets = opp.pets
     opp.serverPlayerId = serverPlayer.playerId
     opp.isBot = serverPlayer.bot == true
+    if opp.isBot then
+        opp.visualId = BOT_VISUAL_ID
+    end
     return opp
+end
+
+runArenaPlayerSearch = function(sceneGroup)
+    local query = arenaSearchField and arenaSearchField.text or ""
+    query = query:gsub("^%s+", ""):gsub("%s+$", "")
+    if query == "" then
+        showArenaToast("Enter a username.", true)
+        return
+    end
+
+    native.setKeyboardFocus(nil)
+    if arenaSearchButtonLabel then
+        arenaSearchButtonLabel.text = "..."
+    end
+
+    api.player.search(query, function(response)
+        if arenaSearchButtonLabel and arenaSearchButtonLabel.removeSelf then
+            arenaSearchButtonLabel.text = "SEARCH"
+        end
+
+        local results = response and response.ok and response.data
+            and (response.data.results or response.data.players) or nil
+        if not results or #results == 0 then
+            results = saveUtil.searchProfiles(query)
+        end
+        if not results or #results == 0 then
+            showArenaToast("Player not found.", true)
+            return
+        end
+
+        local normalizedQuery = string.lower(query)
+        local selected = results[1]
+        for _, result in ipairs(results) do
+            local candidateName = result.displayName or result.name
+                or result.username or result.accountName or ""
+            if string.lower(tostring(candidateName)) == normalizedQuery then
+                selected = result
+                break
+            end
+        end
+
+        local player = saveUtil.load()
+        if selected.playerId and player.playerId
+            and tostring(selected.playerId) == tostring(player.playerId)
+        then
+            showArenaToast("You cannot fight yourself.", true)
+            return
+        end
+
+        local opponent = serverPlayerToArenaEntry(selected, player)
+        local session = composer.getVariable("arenaSession")
+        if not session then
+            session = buildArenaSession(player, arenaDifficulty)
+        end
+        session.opponents = session.opponents or {}
+        session.opponents[1] = opponent
+        session.defeated = session.defeated or {}
+        session.defeated[opponentKey(opponent)] = nil
+        composer.setVariable("arenaSession", session)
+        selectedOpponent = opponent
+
+        if rebuildArenaUI and sceneGroup and sceneGroup.removeSelf then
+            rebuildArenaUI(sceneGroup, player, session)
+        end
+        showArenaToast("Selected " .. tostring(opponent.name or query) .. ".")
+    end)
 end
 
 local function normalizePetId(petRef)
@@ -880,7 +998,7 @@ local function updatePreview(sceneGroup, player)
 
     local nameText = display.newText({
         parent = topInfoGroup, text = selectedOpponent.name,
-        x = display.contentCenterX - 155, y = 46,
+        x = display.contentCenterX - 155, y = ARENA_OPPONENT_NAME_Y,
         width = 230,
         font = ui.FONT_BOLD, fontSize = 18, align = "left"
     })
@@ -894,12 +1012,12 @@ local function updatePreview(sceneGroup, player)
     )
     if winIcon then
         winIcon.x = display.contentCenterX + 102
-        winIcon.y = 46
+        winIcon.y = ARENA_OPPONENT_NAME_Y
     end
     local winLabel = display.newText({
         parent = topInfoGroup,
         text = tostring(winText),
-        x = display.contentCenterX + 120, y = 46,
+        x = display.contentCenterX + 120, y = ARENA_OPPONENT_NAME_Y,
         font = ui.FONT_BOLD, fontSize = 11,
         align = "left"
     })
@@ -912,36 +1030,55 @@ local function updatePreview(sceneGroup, player)
         { key="speed",   icon="spd" },
         { key="hp",      icon="hp"  },
     }
-    local statStartX = display.contentCenterX - 142
-    local statSpacing = 94
+    local statStripY = ARENA_STATS_Y
+    local statStripW = display.actualContentWidth - 24
+    local statDivider = display.newRect(
+        topInfoGroup,
+        display.contentCenterX,
+        statStripY - 18,
+        statStripW - 12,
+        1)
+    statDivider:setFillColor(0.18, 0.52, 1.0, 0.34)
+
+    local statLeft = display.contentCenterX - statStripW * 0.5
+    local statCellW = statStripW / #statDefs
 
     for i, def in ipairs(statDefs) do
-        local x = statStartX + (i - 1) * statSpacing
+        local cellCenterX = statLeft + (i - 0.5) * statCellW
+        local iconX = cellCenterX - 22
         local icon = display.newImageRect(
             topInfoGroup,
             "assets/sprites/ui/icons/" .. def.icon .. ".png",
-            34, 34
+            22, 22
         )
         if icon then
-            icon.x = x
-            icon.y = 82
+            icon.x = iconX
+            icon.y = statStripY
             icon.alpha = 0.88
         end
 
         local valueText = display.newText({
             parent   = topInfoGroup,
-            text     = tostring(enemyBuild[def.key] or 0),
-            x        = x + 26,
-            y        = 82,
+            text     = formatArenaStat(enemyBuild[def.key]),
+            x        = cellCenterX - 7,
+            y        = statStripY,
+            width    = 49,
             font     = ui.FONT_BOLD,
-            fontSize = 10,
+            fontSize = 9,
             align    = "left"
         })
         valueText.anchorX = 0
         valueText:setFillColor(0.92, 0.98, 1.0)
+
+        if i < #statDefs then
+            local dividerX = statLeft + i * statCellW
+            local divider = display.newRect(
+                topInfoGroup, dividerX, statStripY, 1, 20)
+            divider:setFillColor(0.18, 0.48, 0.88, 0.30)
+        end
     end
 
-    local baseY = 206
+    local baseY = 226
     local heroX = display.contentCenterX + 92
     local enemyShadow = display.newRoundedRect(previewGroup, heroX, baseY + 74, 70, 13, 7)
     enemyShadow:setFillColor(0, 0, 0, 0.32)
@@ -999,6 +1136,84 @@ function scene:create(event)
     bg.y = display.contentCenterY
     sceneGroup:insert(bg)
 
+    local searchPanel = display.newRoundedRect(
+        sceneGroup,
+        display.contentCenterX,
+        ARENA_TOP_PANEL_TOP + ARENA_TOP_PANEL_H * 0.5,
+        display.actualContentWidth - 16,
+        ARENA_TOP_PANEL_H,
+        8)
+    searchPanel:setFillColor(0.015, 0.05, 0.13, 0.97)
+    searchPanel.strokeWidth = 1.5
+    searchPanel:setStrokeColor(0.18, 0.50, 1.0, 0.58)
+
+    local searchLabel = display.newText({
+        parent = sceneGroup,
+        text = "SEARCH PLAYER",
+        x = display.screenOriginX + 18,
+        y = ARENA_SEARCH_LABEL_Y,
+        font = ui.FONT_BOLD,
+        fontSize = 9,
+        align = "left",
+    })
+    searchLabel.anchorX = 0
+    searchLabel:setFillColor(0.38, 0.86, 1.0)
+
+    local searchInputY = ARENA_SEARCH_INPUT_Y
+    local searchBg = display.newRoundedRect(
+        sceneGroup,
+        display.contentCenterX - 34,
+        searchInputY,
+        display.actualContentWidth - 138,
+        30,
+        7)
+    searchBg:setFillColor(0.04, 0.10, 0.24, 0.98)
+    searchBg.strokeWidth = 1.5
+    searchBg:setStrokeColor(0.20, 0.55, 1.00, 0.62)
+
+    arenaSearchField = native.newTextField(
+        display.contentCenterX - 30,
+        searchInputY,
+        display.actualContentWidth - 158,
+        22)
+    arenaSearchField.placeholder = "Enter player name"
+    arenaSearchField.inputType = "default"
+    arenaSearchField.returnKey = "search"
+    arenaSearchField.hasBackground = false
+    arenaSearchField:setTextColor(0.85, 0.95, 1.0)
+
+    local searchBtn = display.newRoundedRect(
+        sceneGroup,
+        display.screenOriginX + display.actualContentWidth - 55,
+        searchInputY,
+        66,
+        30,
+        7)
+    searchBtn:setFillColor(0.05, 0.18, 0.42, 0.97)
+    searchBtn.strokeWidth = 1.5
+    searchBtn:setStrokeColor(0.28, 0.68, 1.0, 0.82)
+    arenaSearchButtonLabel = display.newText({
+        parent = sceneGroup,
+        text = "SEARCH",
+        x = searchBtn.x,
+        y = searchBtn.y,
+        font = ui.FONT_BOLD,
+        fontSize = 8,
+    })
+    arenaSearchButtonLabel:setFillColor(0.78, 0.92, 1.0)
+    arenaSearchButtonLabel.isHitTestable = false
+
+    local function submitArenaSearch()
+        runArenaPlayerSearch(sceneGroup)
+        return true
+    end
+    searchBtn:addEventListener("tap", submitArenaSearch)
+    arenaSearchField:addEventListener("userInput", function(searchEvent)
+        if searchEvent.phase == "submitted" then
+            submitArenaSearch()
+        end
+    end)
+
     updatePreview(sceneGroup, player)
 
     rebuildArenaUI = function(sg, pl, session)
@@ -1015,13 +1230,13 @@ function scene:create(event)
 
         local wallSurface = display.newRect(
             wallGroup,
-            display.contentCenterX, 420,
-            display.actualContentWidth - 25, 190
+            display.contentCenterX, 440,
+            display.actualContentWidth - 25, 205
         )
         wallSurface:setFillColor(0, 0, 0, 0.76)
         wallSurface.isHitTestable = false
 
-        local controlY      = 320
+        local controlY      = 346
         local controlBtnW   = 110
         local controlBtnH   = 34
         local controlSpacing = 20
@@ -1084,7 +1299,7 @@ function scene:create(event)
         local gridGroup = display.newGroup()
         wallGroup:insert(gridGroup)
 
-        local startY = 380
+        local startY = 406
 
         if not session.serverRequested then
             session.serverRequested = true
@@ -1447,6 +1662,10 @@ end
 function scene:show(event)
     if event.phase ~= "did" then return end
 
+    if arenaSearchField then
+        arenaSearchField.isVisible = true
+    end
+
     local sceneGroup   = self.view
     local player       = saveUtil.load()
     local arenaSession = composer.getVariable("arenaSession")
@@ -1496,6 +1715,10 @@ end
 -------------------------------------------------
 function scene:hide(event)
     if event.phase ~= "will" then return end
+    native.setKeyboardFocus(nil)
+    if arenaSearchField then
+        arenaSearchField.isVisible = false
+    end
     if difficultyPopup and difficultyPopup.removeSelf then
         difficultyPopup:removeSelf()
     end
@@ -1503,8 +1726,17 @@ function scene:hide(event)
     radialMenu.destroy()
 end
 
+function scene:destroy(event)
+    if arenaSearchField and arenaSearchField.removeSelf then
+        arenaSearchField:removeSelf()
+    end
+    arenaSearchField = nil
+    arenaSearchButtonLabel = nil
+end
+
 scene:addEventListener("create", scene)
 scene:addEventListener("show",   scene)
 scene:addEventListener("hide",   scene)
+scene:addEventListener("destroy", scene)
 
 return scene

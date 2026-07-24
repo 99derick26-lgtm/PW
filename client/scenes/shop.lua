@@ -46,15 +46,53 @@ local STAT_BANNERS = {
     hp      = "assets/sprites/ui/icons/hp_banner.png",
 }
 
+local STAT_BANNER_WIDTH = 72
+local STAT_BANNER_HEIGHT = 32
+local STAT_VALUE_OFFSET_X = 44
+local STAT_COLUMN_GAP = 128
+
+local WEAPON_STAT_ORDER = { attack=1, defense=2, speed=3, hp=4 }
+local ARMOR_STAT_ORDER = { hp=1, defense=2, speed=3, attack=4 }
+
+local function orderGearStats(item, entries)
+    local slot = item and item.slot
+    local order
+    if slot == "weapon" then
+        order = WEAPON_STAT_ORDER
+    elseif slot == "helmet" or slot == "chest" or slot == "gloves"
+        or slot == "boots" or slot == "necklace" or slot == "ring"
+        or slot == "charm" then
+        order = ARMOR_STAT_ORDER
+    else
+        return false
+    end
+
+    table.sort(entries, function(a, b)
+        local aRank = order[a.stat] or 99
+        local bRank = order[b.stat] or 99
+        if aRank == bRank then
+            return tostring(a.stat) < tostring(b.stat)
+        end
+        return aRank < bRank
+    end)
+    return true
+end
+
 local function drawStatBanner(parent, statKey, x, y, value)
-    local ok, banner = pcall(display.newImageRect, parent, STAT_BANNERS[statKey], 82, 24)
+    local ok, banner = pcall(
+        display.newImageRect,
+        parent,
+        STAT_BANNERS[statKey],
+        STAT_BANNER_WIDTH,
+        STAT_BANNER_HEIGHT
+    )
     if ok and banner then
         banner.x = x
         banner.y = y
     end
     local st = display.newText({
         parent=parent, text=tostring(value or ""),
-        x=x + 52, y=y, width=70,
+        x=x + STAT_VALUE_OFFSET_X, y=y, width=70,
         font=ui.FONT_BOLD, fontSize=14, align="left"
     })
     st.anchorX = 0
@@ -414,7 +452,7 @@ local function showItemPopup(item)
     local cx = display.contentCenterX
     local cy = display.contentCenterY
     local panelW = math.min(display.actualContentWidth - 30, 326)
-    local panelH = 292
+    local panelH = 324
     local buyable = (not locked) and canAfford
 
     local box = display.newRoundedRect(content, cx, cy, panelW, panelH, 8)
@@ -476,18 +514,10 @@ local function showItemPopup(item)
         for stat, bonus in pairs(item.statPercent) do
             local text
             if type(bonus) == "table" then
-                local lo = math.floor(bonus.min * 100)
-                local hi = math.floor(bonus.max * 100)
-                text = lo==hi and ("+"..lo.."%") or ("+"..lo.."–"..hi.."%")
+                text = formatPercentRange(bonus.min, bonus.max)
             else
-                local pct  = math.floor(math.abs(bonus) * 100)
-                local sign = bonus >= 0 and "+" or "-"
-                text = sign..pct.."%"
+                text = formatPercentValue(bonus)
             end
-            if string.sub(text, 1, 2) == "+-" then
-                text = string.sub(text, 2)
-            end
-            text = string.gsub(text, "%%%-", "%%-")
             statEntries[#statEntries + 1] = { stat=stat, text=text }
         end
     elseif item.type == "injection" then
@@ -508,14 +538,14 @@ local function showItemPopup(item)
     end
 
     local statsStartX = cx - 102
-    local statsStartY = cy + 30
-    local statColGap = 138
+    local statsStartY = cy + 22
     local statCellH = 34
+    local verticalGearStats = orderGearStats(item, statEntries)
     for i = 1, math.min(4, #statEntries) do
         local entry = statEntries[i]
-        local col = (i - 1) % 2
-        local row = math.floor((i - 1) / 2)
-        local sx = statsStartX + col * statColGap
+        local col = verticalGearStats and 0 or ((i - 1) % 2)
+        local row = verticalGearStats and (i - 1) or math.floor((i - 1) / 2)
+        local sx = statsStartX + col * STAT_COLUMN_GAP
         local sy = statsStartY + row * statCellH
         drawStatBanner(content, entry.stat, sx, sy, entry.text)
     end
